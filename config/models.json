@@ -1,0 +1,17 @@
+{
+  "default_model": "sense-voice-zh-en-ja-ko-yue-int8",
+  "models": [
+    {
+      "id": "sense-voice-zh-en-ja-ko-yue-int8",
+      "label": "SenseVoice-Small (中/英/日/韩/粤)",
+      "description": "SenseVoice-Small 多语种识别，支持自动标点与数字/单位规范化。",
+      "type": "sense_voice",
+      "config": {
+        "model": "../../sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/model.int8.onnx",
+        "tokens": "../../sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/tokens.txt",
+        "num_threads": 4,
+        "use_itn": true
+      }
+    }
+  ]
+}

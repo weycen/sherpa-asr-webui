@@ -1,294 +1,130 @@
+"""FastAPI 入口：提供 /api 接口并托管 web/ 下的前端页面。"""
+
 import os
-import time
-import shutil
+import sys
 import tempfile
-import subprocess
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
-import sherpa_onnx
-import soundfile as sf
 
-app = FastAPI(title="SenseVoice ASR WebUI")
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.staticfiles import StaticFiles
 
-# 模型路径（确认与你解压的文件夹名一致）
-MODEL_DIR = "./sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"
-TOKENS_PATH = os.path.join(MODEL_DIR, "tokens.txt")
-MODEL_PATH = os.path.join(MODEL_DIR, "model.int8.onnx")
-
-print("正在载入 SenseVoice-Small 模型...")
-recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
-    tokens=TOKENS_PATH,
-    model=MODEL_PATH,
-    num_threads=4,
-    use_itn=True,  # 自动标点与规范化
+from app.config import DEFAULT_MODELS_FILE, ROOT_DIR, load_models
+from app.model_manager import ModelLoadError, ModelManager, ModelNotFoundError
+from app.transcriber import (
+    TranscriptionError,
+    audio_seconds,
+    convert_to_16k_mono_wav,
+    transcribe_wav,
 )
-print("模型加载完毕！")
 
-# 嵌入前端 Web 页面
-HTML_CONTENT = """
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SenseVoice 本地语音转文字</title>
-    <style>
-        :root {
-            --primary: #2563eb;
-            --primary-hover: #1d4ed8;
-            --bg: #f8fafc;
-            --card-bg: #ffffff;
-            --border: #e2e8f0;
-            --text-main: #0f172a;
-            --text-sub: #64748b;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: var(--bg); color: var(--text-main); display: flex; justify-content: center; padding: 40px 16px; min-height: 100vh; }
-        .container { width: 100%; max-width: 680px; display: flex; flex-direction: column; gap: 20px; }
-        .card { background: var(--card-bg); border-radius: 14px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -2px rgba(0,0,0,0.05); border: 1px solid var(--border); }
-        h1 { font-size: 1.4rem; font-weight: 700; margin-bottom: 6px; }
-        p.subtitle { font-size: 0.9rem; color: var(--text-sub); margin-bottom: 20px; }
-        
-        /* 拖拽上传区域 */
-        .dropzone {
-            border: 2px dashed #cbd5e1;
-            border-radius: 10px;
-            padding: 36px 20px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            background: #fdfdfd;
-        }
-        .dropzone.dragover { border-color: var(--primary); background: #eff6ff; }
-        .dropzone-icon { font-size: 2.2rem; margin-bottom: 10px; color: var(--text-sub); }
-        .dropzone-text { font-size: 0.95rem; font-weight: 500; color: var(--text-main); margin-bottom: 4px; }
-        .dropzone-hint { font-size: 0.8rem; color: var(--text-sub); }
-        #fileInput { display: none; }
-        
-        .file-info {
-            display: none;
-            margin-top: 14px;
-            padding: 10px 14px;
-            background: #f1f5f9;
-            border-radius: 8px;
-            font-size: 0.85rem;
-            color: #334155;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
+WEB_DIR = ROOT_DIR / "web"
 
-        /* 转录操作栏 */
-        .btn-group { margin-top: 18px; display: flex; gap: 10px; }
-        button {
-            flex: 1;
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 12px;
-            border-radius: 8px;
-            font-size: 0.95rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background 0.15s ease;
-        }
-        button:hover { background: var(--primary-hover); }
-        button:disabled { background: #94a3b8; cursor: not-allowed; }
 
-        /* 结果展示区 */
-        .result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-        .result-title { font-weight: 600; font-size: 1rem; }
-        .duration-tag { font-size: 0.75rem; color: var(--text-sub); background: #f1f5f9; padding: 2px 8px; border-radius: 4px; }
-        .result-box {
-            width: 100%;
-            min-height: 140px;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 14px;
-            font-size: 0.95rem;
-            line-height: 1.6;
-            color: var(--text-main);
-            background: #fafafa;
-            resize: vertical;
-            outline: none;
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-        .copy-btn {
-            background: transparent;
-            color: var(--primary);
-            border: 1px solid var(--primary);
-            padding: 6px 12px;
-            font-size: 0.8rem;
-            border-radius: 6px;
-            width: auto;
-            flex: none;
-        }
-        .copy-btn:hover { background: #eff6ff; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="card">
-            <h1>SenseVoice 语音转写控制台</h1>
-            <p class="subtitle">纯本地 CPU 推理，支持中/英/日/韩/粤语等多种语言</p>
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    return float(raw) if raw else default
 
-            <div class="dropzone" id="dropzone">
-                <div class="dropzone-icon">🎙️</div>
-                <div class="dropzone-text">点击选择 或 将音频文件拖曳至此</div>
-                <div class="dropzone-hint">支持 MP3, WAV, M4A, AAC, FLAC, OGG 等常见格式</div>
-                <input type="file" id="fileInput" accept="audio/*">
-            </div>
 
-            <div class="file-info" id="fileInfo" style="display: none;">
-                <span id="fileName">已选文件</span>
-                <span id="fileSize">0 MB</span>
-            </div>
+HOST = os.getenv("ASR_HOST", "0.0.0.0")
+PORT = int(os.getenv("ASR_PORT", "8000"))
+MAX_UPLOAD_BYTES = int(_env_float("ASR_MAX_UPLOAD_MB", 512) * 1024 * 1024)
+MAX_AUDIO_SECONDS = _env_float("ASR_MAX_AUDIO_SECONDS", 0) or None
+MODELS_FILE = os.getenv("ASR_MODELS_FILE") or str(DEFAULT_MODELS_FILE)
 
-            <div class="btn-group">
-                <button id="transcribeBtn" disabled>开始转写</button>
-            </div>
-        </div>
+# 配置文件缺失/非法属于启动期错误；模型本体按需懒加载，缺文件只影响对应模型。
+try:
+    DEFAULT_MODEL_ID, MODEL_SPECS = load_models(MODELS_FILE)
+except Exception as exc:
+    print(f"[错误] 加载模型配置失败: {exc}", file=sys.stderr)
+    sys.exit(1)
 
-        <div class="card" id="resultCard" style="display: none;">
-            <div class="result-header">
-                <span class="result-title">识别结果</span>
-                <div>
-                    <span class="duration-tag" id="timeCost"></span>
-                    <button class="copy-btn" id="copyBtn">复制文本</button>
-                </div>
-            </div>
-            <textarea class="result-box" id="resultText" readonly placeholder="等待处理..."></textarea>
-        </div>
-    </div>
+manager = ModelManager(MODEL_SPECS, DEFAULT_MODEL_ID)
 
-    <script>
-        const dropzone = document.getElementById('dropzone');
-        const fileInput = document.getElementById('fileInput');
-        const fileInfo = document.getElementById('fileInfo');
-        const fileName = document.getElementById('fileName');
-        const fileSize = document.getElementById('fileSize');
-        const transcribeBtn = document.getElementById('transcribeBtn');
-        const resultCard = document.getElementById('resultCard');
-        const resultText = document.getElementById('resultText');
-        const timeCost = document.getElementById('timeCost');
-        const copyBtn = document.getElementById('copyBtn');
+app = FastAPI(title="Sherpa ASR WebUI")
 
-        let selectedFile = null;
 
-        // 拖拽事件
-        ['dragenter', 'dragover'].forEach(name => {
-            dropzone.addEventListener(name, (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
-        });
-        ['dragleave', 'drop'].forEach(name => {
-            dropzone.addEventListener(name, (e) => { e.preventDefault(); dropzone.classList.remove('dragover'); });
-        });
-        dropzone.addEventListener('drop', (e) => {
-            const files = e.dataTransfer.files;
-            if (files.length > 0) handleFile(files[0]);
-        });
+@app.get("/api/models")
+def list_models():
+    return {"default_model": manager.default_model_id, "models": manager.list()}
 
-        dropzone.addEventListener('click', () => fileInput.click());
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) handleFile(e.target.files[0]);
-        });
 
-        function handleFile(file) {
-            selectedFile = file;
-            fileName.textContent = file.name;
-            fileSize.textContent = (file.size / (1024 * 1024)).toFixed(2) + ' MB';
-            fileInfo.style.display = 'flex';
-            transcribeBtn.disabled = false;
-        }
+def _save_upload(upload: UploadFile) -> tuple[str, str]:
+    """落盘上传文件并返回 (input_path, wav_path)，超过大小上限时抛出 413。"""
+    suffix = os.path.splitext(upload.filename or "")[1][:10].lower()
+    fd, input_path = tempfile.mkstemp(prefix="asr_upload_", suffix=suffix or ".audio")
+    os.close(fd)
 
-        // 转写请求
-        transcribeBtn.addEventListener('click', async () => {
-            if (!selectedFile) return;
+    size = 0
+    with open(input_path, "wb") as dst:
+        while True:
+            chunk = upload.file.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"文件超过大小限制 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+                )
+            dst.write(chunk)
+    return input_path, input_path + ".16k.wav"
 
-            transcribeBtn.disabled = true;
-            transcribeBtn.textContent = '转写中...';
-            resultCard.style.display = 'block';
-            resultText.value = '正在解析音频并推理，请稍候...';
-            timeCost.textContent = '';
-
-            const formData = new FormData();
-            formData.append('file', selectedFile);
-
-            const startTime = performance.now();
-            try {
-                const response = await fetch('/api/transcribe', {
-                    method: 'POST',
-                    body: formData
-                });
-                const res = await response.json();
-                const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
-
-                if (res.status === 'success') {
-                    resultText.value = res.text || '(未识别到有效语音内容)';
-                    timeCost.textContent = `耗时 ${elapsed} 秒 (引擎推理: ${res.inference_time}s)`;
-                } else {
-                    resultText.value = '转写失败: ' + res.message;
-                }
-            } catch (err) {
-                resultText.value = '请求出错，请检查服务端连接: ' + err.message;
-            } finally {
-                transcribeBtn.disabled = false;
-                transcribeBtn.textContent = '开始转写';
-            }
-        });
-
-        // 复制功能
-        copyBtn.addEventListener('click', () => {
-            if (!resultText.value) return;
-            navigator.clipboard.writeText(resultText.value).then(() => {
-                const oldText = copyBtn.textContent;
-                copyBtn.textContent = '已复制！';
-                setTimeout(() => copyBtn.textContent = oldText, 1500);
-            });
-        });
-    </script>
-</body>
-</html>
-"""
-
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    return HTML_CONTENT
 
 @app.post("/api/transcribe")
-async def transcribe_audio(file: UploadFile = File(...)):
-    suffix = os.path.splitext(file.filename)[-1]
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        input_path = tmp.name
-
-    # 转为标准 16kHz mono WAV，确保兼容 mp3/m4a/aac 等任何音频格式
-    wav_path = input_path + ".converted.wav"
+def transcribe_audio(model: str = Form(""), file: UploadFile = File(...)):
+    model_id = model or manager.default_model_id
     try:
-        cmd = [
-            "ffmpeg", "-y", "-i", input_path,
-            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
-            wav_path
-        ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        runtime = manager.get(model_id)
+    except ModelNotFoundError:
+        raise HTTPException(status_code=404, detail=f"未知模型: {model_id}")
+    except ModelLoadError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
-        audio_data, sample_rate = sf.read(wav_path, dtype="float32")
+    input_path = wav_path = None
+    try:
+        input_path, wav_path = _save_upload(file)
+        convert_to_16k_mono_wav(input_path, wav_path)
 
-        t0 = time.time()
-        stream = recognizer.create_stream()
-        stream.accept_waveform(sample_rate, audio_data)
-        recognizer.decode_stream(stream)
-        text = stream.result.text.strip()
-        inf_time = round(time.time() - t0, 3)
+        if MAX_AUDIO_SECONDS:
+            seconds = audio_seconds(wav_path)
+            if seconds > MAX_AUDIO_SECONDS:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"音频时长 {seconds:.0f} 秒，超过限制 {int(MAX_AUDIO_SECONDS)} 秒",
+                )
 
-        return {"status": "success", "text": text, "inference_time": inf_time}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+        text, inf_time = transcribe_wav(runtime, wav_path)
+        return {
+            "status": "success",
+            "model": runtime.spec.id,
+            "text": text,
+            "inference_time": inf_time,
+        }
+    except HTTPException:
+        raise
+    except TranscriptionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"服务端处理失败: {exc}")
     finally:
-        for p in [input_path, wav_path]:
-            if os.path.exists(p):
-                os.remove(p)
+        for path in (input_path, wav_path):
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+
+if not WEB_DIR.is_dir():
+    print(f"[错误] 前端目录不存在: {WEB_DIR}", file=sys.stderr)
+    sys.exit(1)
+
+app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    print(f"模型配置文件: {MODELS_FILE}")
+    print(f"默认模型: {manager.default_model_id}")
+    print(f"上传大小上限: {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+    uvicorn.run(app, host=HOST, port=PORT)
