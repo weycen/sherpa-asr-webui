@@ -7,6 +7,8 @@ const elements = {
     transcribeBtn: document.getElementById("transcribeBtn"),
     modelSelect: document.getElementById("modelSelect"),
     modelStatus: document.getElementById("modelStatus"),
+    punctRow: document.getElementById("punctRow"),
+    usePunct: document.getElementById("usePunct"),
     resultCard: document.getElementById("resultCard"),
     resultText: document.getElementById("resultText"),
     resultTitle: document.querySelector(".result-title"),
@@ -27,6 +29,7 @@ async function loadModels() {
         if (!res.ok) throw new Error(await readError(res));
         const data = await res.json();
         state.models = data.models;
+        state.punctuationAvailable = Boolean(data.punctuation_available);
 
         elements.modelSelect.replaceChildren();
         for (const model of data.models) {
@@ -39,6 +42,7 @@ async function loadModels() {
             elements.modelSelect.value = data.default_model;
         }
         elements.modelSelect.disabled = false;
+        elements.punctRow.classList.toggle("is-hidden", !state.punctuationAvailable);
         const readyCount = state.models.filter((m) => m.ready).length;
         elements.modelStatus.textContent =
             readyCount > 0 ? `${readyCount} 个模型已加载` : `${state.models.length} 个模型可用`;
@@ -134,6 +138,9 @@ elements.transcribeBtn.addEventListener("click", async () => {
     const formData = new FormData();
     formData.append("model", elements.modelSelect.value);
     formData.append("file", state.file);
+    if (state.punctuationAvailable) {
+        formData.append("use_punctuation", elements.usePunct.checked);
+    }
 
     const start = performance.now();
     try {

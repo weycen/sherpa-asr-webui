@@ -1,5 +1,9 @@
 {
   "default_model": "sense-voice-zh-en-ja-ko-yue-int8",
+  "punctuation": {
+    "ct_transformer": "../../sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8/model.int8.onnx",
+    "num_threads": 2
+  },
   "models": [
     {
       "id": "sense-voice-zh-en-ja-ko-yue-int8",

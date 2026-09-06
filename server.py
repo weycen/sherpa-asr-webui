@@ -9,6 +9,12 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import DEFAULT_MODELS_FILE, ROOT_DIR, load_models
 from app.model_manager import ModelLoadError, ModelManager, ModelNotFoundError
+from app.postprocess import (
+    ascii_punctuation_for_english,
+    looks_all_caps,
+    normalize_english_case,
+)
+from app.punctuator import Punctuator
 from app.transcriber import (
     TranscriptionError,
     audio_seconds,
@@ -32,19 +38,24 @@ MODELS_FILE = os.getenv("ASR_MODELS_FILE") or str(DEFAULT_MODELS_FILE)
 
 # 配置文件缺失/非法属于启动期错误；模型本体按需懒加载，缺文件只影响对应模型。
 try:
-    DEFAULT_MODEL_ID, MODEL_SPECS = load_models(MODELS_FILE)
+    DEFAULT_MODEL_ID, MODEL_SPECS, PUNCT_SPEC = load_models(MODELS_FILE)
 except Exception as exc:
     print(f"[错误] 加载模型配置失败: {exc}", file=sys.stderr)
     sys.exit(1)
 
 manager = ModelManager(MODEL_SPECS, DEFAULT_MODEL_ID)
+punctuator = Punctuator(PUNCT_SPEC) if PUNCT_SPEC else None
 
 app = FastAPI(title="Sherpa ASR WebUI")
 
 
 @app.get("/api/models")
 def list_models():
-    return {"default_model": manager.default_model_id, "models": manager.list()}
+    return {
+        "default_model": manager.default_model_id,
+        "punctuation_available": bool(punctuator and punctuator.available()),
+        "models": manager.list(),
+    }
 
 
 def _save_upload(upload: UploadFile) -> tuple[str, str]:
@@ -70,7 +81,11 @@ def _save_upload(upload: UploadFile) -> tuple[str, str]:
 
 
 @app.post("/api/transcribe")
-def transcribe_audio(model: str = Form(""), file: UploadFile = File(...)):
+def transcribe_audio(
+    model: str = Form(""),
+    use_punctuation: bool = Form(True),
+    file: UploadFile = File(...),
+):
     model_id = model or manager.default_model_id
     try:
         runtime = manager.get(model_id)
@@ -93,6 +108,14 @@ def transcribe_audio(model: str = Form(""), file: UploadFile = File(...)):
                 )
 
         text, inf_time = transcribe_wav(runtime, wav_path)
+        # SenseVoice 英文输出固定全大写；先归一，标点模型输出全角标点后再转半角。
+        is_all_caps_english = looks_all_caps(text)
+        if is_all_caps_english:
+            text = normalize_english_case(text)
+        if use_punctuation and punctuator is not None:
+            text = punctuator.add(text)
+        if is_all_caps_english:
+            text = normalize_english_case(ascii_punctuation_for_english(text))
         return {
             "status": "success",
             "model": runtime.spec.id,

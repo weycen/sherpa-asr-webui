@@ -16,6 +16,7 @@ _PATH_KEYS = {
     "decoder",
     "joiner",
     "lm",
+    "ct_transformer",
     "rule_fsts",
     "rule_fars",
     "hotwords_file",
@@ -36,6 +37,14 @@ class ModelSpec:
     config: dict = field(default_factory=dict)
 
 
+@dataclass
+class PunctuationSpec:
+    """Companion punctuation-restoration model (sherpa-onnx OfflinePunctuation)."""
+
+    ct_transformer: str
+    num_threads: int = 1
+
+
 def _resolve_paths(base_dir: Path, config: dict) -> dict:
     resolved = {}
     for key, value in config.items():
@@ -47,8 +56,10 @@ def _resolve_paths(base_dir: Path, config: dict) -> dict:
     return resolved
 
 
-def load_models(models_file: str | os.PathLike | None = None) -> tuple[str, list[ModelSpec]]:
-    """Return (default_model_id, specs). Raises on missing/invalid config."""
+def load_models(
+    models_file: str | os.PathLike | None = None,
+) -> tuple[str, list[ModelSpec], PunctuationSpec | None]:
+    """Return (default_model_id, specs, punctuation_spec). Raises on bad config."""
     path = Path(models_file or os.getenv("ASR_MODELS_FILE") or DEFAULT_MODELS_FILE)
     if not path.is_file():
         raise FileNotFoundError(f"模型配置文件不存在: {path}")
@@ -79,4 +90,17 @@ def load_models(models_file: str | os.PathLike | None = None) -> tuple[str, list
     default_id = str(data.get("default_model") or specs[0].id)
     if default_id not in seen:
         raise ValueError(f"default_model '{default_id}' 不在 models 列表中")
-    return default_id, specs
+
+    punctuation = None
+    raw_punct = data.get("punctuation")
+    if raw_punct:
+        resolved = _resolve_paths(path.parent, raw_punct)
+        ct_transformer = resolved.get("ct_transformer")
+        if not ct_transformer:
+            raise ValueError("punctuation 配置缺少 ct_transformer 字段")
+        try:
+            num_threads = int(resolved.get("num_threads", 1))
+        except (TypeError, ValueError):
+            raise ValueError("punctuation.num_threads 必须是整数")
+        punctuation = PunctuationSpec(ct_transformer=ct_transformer, num_threads=num_threads)
+    return default_id, specs, punctuation
