@@ -45,6 +45,18 @@ class PunctuationSpec:
     num_threads: int = 1
 
 
+@dataclass
+class VadSpec:
+    """Global voice-activity-detection settings for long-audio splitting."""
+
+    model: str
+    sample_rate: int = 16000
+    threshold: float = 0.5
+    min_speech_duration: float = 0.25
+    min_silence_duration: float = 0.5
+    max_speech_duration: float = 25.0
+
+
 def _resolve_paths(base_dir: Path, config: dict) -> dict:
     resolved = {}
     for key, value in config.items():
@@ -58,8 +70,8 @@ def _resolve_paths(base_dir: Path, config: dict) -> dict:
 
 def load_models(
     models_file: str | os.PathLike | None = None,
-) -> tuple[str, list[ModelSpec], PunctuationSpec | None]:
-    """Return (default_model_id, specs, punctuation_spec). Raises on bad config."""
+) -> tuple[str, list[ModelSpec], PunctuationSpec | None, VadSpec | None]:
+    """Return (default_model_id, specs, punctuation_spec, vad_spec). Raises on bad config."""
     path = Path(models_file or os.getenv("ASR_MODELS_FILE") or DEFAULT_MODELS_FILE)
     if not path.is_file():
         raise FileNotFoundError(f"模型配置文件不存在: {path}")
@@ -103,4 +115,27 @@ def load_models(
         except (TypeError, ValueError):
             raise ValueError("punctuation.num_threads 必须是整数")
         punctuation = PunctuationSpec(ct_transformer=ct_transformer, num_threads=num_threads)
-    return default_id, specs, punctuation
+
+    vad = None
+    raw_vad = data.get("vad")
+    if raw_vad:
+        resolved = _resolve_paths(path.parent, raw_vad)
+        model = resolved.get("model")
+        if not model:
+            raise ValueError("vad 配置缺少 model 字段")
+
+        def _num(key, default):
+            try:
+                return type(default)(resolved.get(key, default))
+            except (TypeError, ValueError):
+                raise ValueError(f"vad.{key} 必须是数字")
+
+        vad = VadSpec(
+            model=model,
+            sample_rate=_num("sample_rate", 16000),
+            threshold=_num("threshold", 0.5),
+            min_speech_duration=_num("min_speech_duration", 0.25),
+            min_silence_duration=_num("min_silence_duration", 0.5),
+            max_speech_duration=_num("max_speech_duration", 25.0),
+        )
+    return default_id, specs, punctuation, vad

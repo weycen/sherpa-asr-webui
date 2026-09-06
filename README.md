@@ -11,7 +11,10 @@ sherpa-asr-webui/
 ├── app/
 │   ├── config.py        # 读取并校验 config/models.json，解析模型文件路径
 │   ├── model_manager.py # 模型注册表：按 id 懒加载、缓存、每模型一把推理锁
-│   ├── transcriber.py   # ffmpeg 转 16k mono WAV + sherpa-onnx 解码
+│   ├── transcriber.py   # ffmpeg 转 16k mono WAV / ffprobe 时长探测
+│   ├── vad.py           # silero VAD 长音频切段（语音活动检测）
+│   ├── pipeline.py      # VAD 切段 -> 逐段解码 -> 按句群合并输出
+│   ├── uploads.py       # 上传文件暂存（临时目录 + TTL 清理）
 │   ├── punctuator.py    # 可选：标点恢复（sherpa-onnx OfflinePunctuation）
 │   └── postprocess.py   # 转写文本后处理（英文大小写归一化）
 ├── config/
@@ -53,6 +56,14 @@ sudo apt install ffmpeg
     "ct_transformer": "../../sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8/model.int8.onnx",
     "num_threads": 2
   },
+  "vad": {
+    "model": "../../silero_vad.onnx",
+    "sample_rate": 16000,
+    "threshold": 0.5,
+    "min_speech_duration": 0.25,
+    "min_silence_duration": 0.5,
+    "max_speech_duration": 25.0
+  },
   "models": [
     {
       "id": "sense-voice-zh-en-ja-ko-yue-int8",
@@ -76,6 +87,23 @@ sudo apt install ffmpeg
 - `label` / `description`：下拉框与状态展示用，仅前端文案。
 - `type`：指定加载器，当前支持 `sense_voice`、`paraformer`、`whisper`、`transducer`。
 - `config`：原样作为对应加载函数的关键字参数（如 `from_sense_voice`），路径类参数自动解析。
+- `punctuation`：可选，sherpa-onnx 标点恢复模型（CT-Transformer，中/英）。
+- `vad`：可选，silero VAD 长音频分段模型；缺失时按固定 25 秒窗口兜底。
+
+## 长音频处理
+
+音频会先经 silero VAD 切成一个个语音段（单段上限默认 25 秒），逐段独立解码后再合并，因此
+上传 20 分钟以上的长录音也不会一次性把所有音频灌进模型导致内存耗尽。合并时按静音停顿和篇幅
+切成适合阅读的段落，用空行分隔输出。VAD 模型下载：
+
+```bash
+cd /home/weycen/asr-service
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+```
+
+上传与转写是两步接口：前端先 `POST /api/upload`（带进度）拿 `upload_id`，再
+`POST /api/transcribe` 提交 `upload_id` 转写。上传文件暂存在临时目录，自动过期清理。
+同时提供 `ASR_MAX_CONCURRENT`（默认 2）限制并发推理，避免小内存机器被同时多个长音频打满。
 
 ## 标点恢复与英文大小写
 
@@ -113,11 +141,13 @@ tar xjf sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.b
 | `ASR_MODELS_FILE` | `config/models.json` | 模型配置文件路径 |
 | `ASR_MAX_UPLOAD_MB` | `512` | 单次上传大小上限（MB） |
 | `ASR_MAX_AUDIO_SECONDS` | `0` | 音频时长上限（秒），`0` 表示不限 |
+| `ASR_MAX_CONCURRENT` | `2` | 同时进行的转写任务数上限 |
+| `ASR_UPLOAD_DIR` | 系统临时目录 | 上传文件存放目录 |
 
 ## API
 
-- `GET /api/models`：返回 `default_model`、`punctuation_available` 和模型列表
-  （含 `id/label/description/type/ready`）。
-- `POST /api/transcribe`：multipart 表单，字段 `model`（可选，缺省用默认模型）、
-  `use_punctuation`（可选，布尔，缺省 true）+ `file`。
-  成功返回 `{"status": "success", "model", "text", "inference_time"}`。
+- `GET /api/models`：模型列表，含 `default_model`、`punctuation_available` 和模型明细。
+- `POST /api/upload`：上传音频（multipart `file`），返回 `upload_id/filename/size/duration`。
+- `POST /api/transcribe`：转写已上传文件（multipart `upload_id` + 可选 `model`、
+  `use_punctuation`）。成功返回 `{"status", "model", "text", "paragraphs", "segments",
+  "inference_time", "audio_seconds"}`；`text` 按空行分段落。

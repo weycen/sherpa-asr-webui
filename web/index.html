@@ -38,8 +38,18 @@
             </div>
 
             <div class="file-info is-hidden" id="fileInfo">
-                <span id="fileName" class="file-name"></span>
-                <span id="fileSize" class="file-size"></span>
+                <span class="file-name-wrap">
+                    <span id="fileName" class="file-name"></span>
+                    <span id="fileState" class="file-state is-hidden" aria-live="polite"></span>
+                </span>
+                <span id="fileMeta" class="file-meta"></span>
+            </div>
+
+            <div class="progress-row is-hidden" id="progressRow">
+                <div class="progress-track" aria-hidden="true">
+                    <div id="progressBar" class="progress-bar"></div>
+                </div>
+                <span id="progressText" class="progress-text">正在上传 0%</span>
             </div>
 
             <button id="transcribeBtn" class="primary-btn" disabled>开始转写</button>

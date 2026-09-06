@@ -179,11 +179,59 @@ h1 {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    max-width: 420px;
 }
 
-.file-size {
+.file-name-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.file-state {
+    flex: none;
+    color: #16a34a;
+    font-size: 0.82rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.file-meta {
     flex: none;
     color: var(--text-sub);
+    white-space: nowrap;
+}
+
+.progress-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.progress-track {
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--surface-muted);
+    border: 1px solid var(--border);
+    overflow: hidden;
+}
+
+.progress-bar {
+    height: 100%;
+    width: 0;
+    background: var(--primary);
+    border-radius: 3px;
+    transition: width 0.2s ease;
+}
+
+.progress-text {
+    flex: none;
+    font-size: 0.78rem;
+    color: var(--text-sub);
+    white-space: nowrap;
 }
 
 .primary-btn {
@@ -295,5 +343,9 @@ h1 {
 
     .status-text {
         width: 100%;
+    }
+
+    .file-meta {
+        display: none;
     }
 }

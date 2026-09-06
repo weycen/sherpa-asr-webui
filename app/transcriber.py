@@ -1,9 +1,7 @@
 """Audio normalization and inference helpers."""
 
+import json
 import subprocess
-import time
-
-import soundfile as sf
 
 
 class TranscriptionError(Exception):
@@ -23,20 +21,26 @@ def convert_to_16k_mono_wav(input_path: str, output_path: str) -> None:
 
 
 def audio_seconds(path: str) -> float:
+    import soundfile as sf
+
     info = sf.info(path)
     return info.frames / info.samplerate
 
 
-def transcribe_wav(runtime, wav_path: str) -> tuple[str, float]:
-    """Run offline inference, returning (text, inference_seconds)."""
-    audio, sample_rate = sf.read(wav_path, dtype="float32")
-
-    t0 = time.time()
-    with runtime.lock:  # sherpa-onnx recognizers are not safe for parallel decode
-        stream = runtime.recognizer.create_stream()
-        stream.accept_waveform(sample_rate, audio)
-        runtime.recognizer.decode_stream(stream)
-        text = stream.result.text.strip()
-    inf_time = round(time.time() - t0, 3)
-
-    return text, inf_time
+def ffprobe_duration(path: str) -> float | None:
+    """Return media duration in seconds via ffprobe, or None when unavailable."""
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "json", path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        data = json.loads(proc.stdout.decode("utf-8", errors="replace"))
+        return float(data["format"]["duration"])
+    except Exception:
+        return None

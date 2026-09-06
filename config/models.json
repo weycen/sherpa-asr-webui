@@ -1,5 +1,13 @@
 {
   "default_model": "sense-voice-zh-en-ja-ko-yue-int8",
+  "vad": {
+    "model": "../../silero_vad.onnx",
+    "sample_rate": 16000,
+    "threshold": 0.5,
+    "min_speech_duration": 0.25,
+    "min_silence_duration": 0.5,
+    "max_speech_duration": 25.0
+  },
   "punctuation": {
     "ct_transformer": "../../sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8/model.int8.onnx",
     "num_threads": 2
