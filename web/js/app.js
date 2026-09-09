@@ -119,10 +119,12 @@ function uploadFile(file) {
     elements.progressRow.classList.remove("is-hidden");
     setProgress(0, "正在上传 0%");
 
+    const TIMEOUT_MS = 60 * 1000; // 60s 内未完成视为失败，避免无限等待
     const formData = new FormData();
     formData.append("file", file);
 
     const xhr = new XMLHttpRequest();
+    xhr.timeout = TIMEOUT_MS;
     xhr.open("POST", "/api/upload");
     xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && e.total > 0) {
@@ -163,6 +165,15 @@ function uploadFile(file) {
         elements.fileState.style.color = "#dc2626";
         elements.fileState.classList.remove("is-hidden");
         setError("上传失败: 网络错误，请重试");
+        updateButton();
+    };
+    xhr.ontimeout = () => {
+        state.uploading = false;
+        elements.progressRow.classList.add("is-hidden");
+        elements.fileState.textContent = "上传超时";
+        elements.fileState.style.color = "#dc2626";
+        elements.fileState.classList.remove("is-hidden");
+        setError("上传超时：服务端未在 60 秒内响应，请确认服务已启动后重试");
         updateButton();
     };
     xhr.send(formData);

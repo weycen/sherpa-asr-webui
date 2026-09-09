@@ -89,18 +89,18 @@ class UploadStore:
         meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     def delete(self, upload_id: str):
-        with self._lock:
-            dst = self._dir(upload_id)
-            if dst.is_dir():
-                for p in dst.glob("*"):
-                    try:
-                        p.unlink()
-                    except OSError:
-                        pass
+        """Delete one upload dir. Caller must hold self._lock when concurrency matters."""
+        dst = self._dir(upload_id)
+        if dst.is_dir():
+            for p in dst.glob("*"):
                 try:
-                    dst.rmdir()
+                    p.unlink()
                 except OSError:
                     pass
+            try:
+                dst.rmdir()
+            except OSError:
+                pass
 
     def prune(self):
         now = time.time()
