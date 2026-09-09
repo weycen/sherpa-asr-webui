@@ -103,31 +103,19 @@ h1 {
     white-space: nowrap;
 }
 
-.check-label {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 0.9rem;
-    font-weight: 500;
-    cursor: pointer;
-    user-select: none;
-}
-
-.check-label input {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--primary);
-    cursor: pointer;
-}
-
 .dropzone {
     border: 2px dashed #c3cfdf;
     border-radius: 8px;
-    padding: 30px 18px;
+    padding: 24px 14px;
     text-align: center;
     cursor: pointer;
     background: var(--surface-muted);
     transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.dropzone.is-compact {
+    max-width: 540px;
+    margin: 0 auto;
 }
 
 .dropzone.dragover {
@@ -141,96 +129,107 @@ h1 {
 }
 
 .dropzone-icon {
-    font-size: 1.9rem;
+    font-size: 1.6rem;
     line-height: 1;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
 }
 
 .dropzone-text {
-    font-size: 0.95rem;
+    font-size: 0.9rem;
     font-weight: 500;
 }
 
 .dropzone-hint {
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     color: var(--text-sub);
-    margin-top: 6px;
+    margin-top: 5px;
 }
 
 #fileInput {
     display: none;
 }
 
+.file-upload-row {
+    display: flex;
+    align-items: center;
+    margin-top: 12px;
+    width: 100%;
+}
+
 .file-info {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-top: 12px;
+    flex: 1;
+    min-width: 0;
     padding: 9px 12px;
     background: var(--surface-muted);
     border: 1px solid var(--border);
     border-radius: 6px;
     font-size: 0.85rem;
     color: #334155;
+    overflow: hidden;
+}
+
+.file-info-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 0;
+    background: #dbeafe;
+    transition: width 0.15s ease-out;
+    pointer-events: none;
+    z-index: 0;
 }
 
 .file-name {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 420px;
 }
 
 .file-name-wrap {
     display: flex;
     align-items: center;
-    gap: 8px;
     min-width: 0;
+    flex: 1;
+    position: relative;
+    z-index: 1;
 }
 
 .file-state {
+    display: none;
     flex: none;
+    width: 24px;
     color: #16a34a;
-    font-size: 0.82rem;
-    font-weight: 600;
-    white-space: nowrap;
+    font-size: 1.1rem;
+    font-weight: 700;
+    line-height: 1;
+    text-align: center;
+    position: relative;
+    z-index: 1;
 }
 
 .file-meta {
     flex: none;
+    position: relative;
+    z-index: 1;
     color: var(--text-sub);
     white-space: nowrap;
 }
 
-.progress-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 12px;
-}
-
-.progress-track {
-    flex: 1;
-    height: 6px;
-    border-radius: 3px;
-    background: var(--surface-muted);
-    border: 1px solid var(--border);
-    overflow: hidden;
-}
-
-.progress-bar {
-    height: 100%;
-    width: 0;
-    background: var(--primary);
-    border-radius: 3px;
-    transition: width 0.2s ease;
-}
-
-.progress-text {
+.file-progress-text {
     flex: none;
+    position: relative;
+    z-index: 1;
     font-size: 0.78rem;
-    color: var(--text-sub);
+    color: var(--primary);
+    font-weight: 600;
     white-space: nowrap;
 }
 
@@ -306,7 +305,9 @@ h1 {
 
 .result-box {
     width: 100%;
-    min-height: 150px;
+    height: 320px;
+    max-height: 60vh;
+    overflow-y: auto;
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 12px;

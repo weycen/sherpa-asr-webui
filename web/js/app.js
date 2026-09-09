@@ -1,20 +1,19 @@
 const elements = {
     dropzone: document.getElementById("dropzone"),
     fileInput: document.getElementById("fileInput"),
+    fileUploadRow: document.getElementById("fileUploadRow"),
     fileInfo: document.getElementById("fileInfo"),
     fileName: document.getElementById("fileName"),
     fileMeta: document.getElementById("fileMeta"),
     fileState: document.getElementById("fileState"),
-    progressRow: document.getElementById("progressRow"),
-    progressBar: document.getElementById("progressBar"),
-    progressText: document.getElementById("progressText"),
+    uploadProgressBar: document.getElementById("uploadProgressBar"),
+    uploadProgressText: document.getElementById("uploadProgressText"),
     transcribeBtn: document.getElementById("transcribeBtn"),
     modelSelect: document.getElementById("modelSelect"),
     modelStatus: document.getElementById("modelStatus"),
     resultCard: document.getElementById("resultCard"),
     resultText: document.getElementById("resultText"),
     resultTitle: document.querySelector(".result-title"),
-    modelTag: document.getElementById("modelTag"),
     timeCost: document.getElementById("timeCost"),
     copyBtn: document.getElementById("copyBtn"),
 };
@@ -22,8 +21,10 @@ const elements = {
 const state = {
     models: [],
     uploadId: null,
+    uploadDuration: null,
     uploading: false,
     busy: false,
+    timer: null,
 };
 
 function formatSize(bytes) {
@@ -40,15 +41,34 @@ function formatDuration(seconds) {
     return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
+function formatClock(seconds) {
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(Math.floor(seconds / 60))}:${pad(Math.floor(seconds % 60))}`;
+}
+
 function updateButton() {
     const ready = state.models.length > 0 && !!state.uploadId && !state.uploading && !state.busy;
     elements.transcribeBtn.disabled = !ready;
-    elements.transcribeBtn.textContent = state.busy ? "正在转写..." : "开始转写";
+    elements.transcribeBtn.textContent = state.busy ? "转写中..." : "开始转写";
 }
 
-function setProgress(percent, text) {
-    elements.progressBar.style.width = `${percent}%`;
-    elements.progressText.textContent = text;
+function setUploadProgress(percent, text, failed) {
+    elements.uploadProgressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    elements.uploadProgressBar.style.background = failed ? "#fecaca" : "#dbeafe";
+    if (text) {
+        elements.uploadProgressText.textContent = text;
+        elements.uploadProgressText.classList.remove("is-hidden");
+    } else {
+        elements.uploadProgressText.textContent = "";
+        elements.uploadProgressText.classList.add("is-hidden");
+    }
+}
+
+function setUploadDone(ok) {
+    // 成功：绿色对勾；失败/超时：红色感叹提示，均不出现文字。
+    elements.fileState.textContent = ok ? "✓" : "!";
+    elements.fileState.style.color = ok ? "#16a34a" : "#dc2626";
+    elements.fileState.style.display = "inline-block";
 }
 
 function setError(message) {
@@ -102,13 +122,19 @@ async function loadModels() {
     }
 }
 
+function resetFileInfo(file) {
+    state.uploadId = null;
+    state.uploadDuration = null;
+    elements.fileName.textContent = file.name;
+    elements.fileMeta.textContent = ""; // 上传完成前不显示大小
+    elements.fileState.style.display = "none";
+    elements.fileUploadRow.classList.remove("is-hidden");
+    setUploadProgress(0, "", false);
+}
+
 function handleFile(file) {
     if (state.busy || state.uploading) return;
-    state.uploadId = null;
-    elements.fileName.textContent = file.name;
-    elements.fileMeta.textContent = formatSize(file.size);
-    elements.fileState.classList.add("is-hidden");
-    elements.fileInfo.classList.remove("is-hidden");
+    resetFileInfo(file);
     updateButton();
     uploadFile(file);
 }
@@ -116,8 +142,7 @@ function handleFile(file) {
 function uploadFile(file) {
     state.uploading = true;
     updateButton();
-    elements.progressRow.classList.remove("is-hidden");
-    setProgress(0, "正在上传 0%");
+    setUploadProgress(0, "0%", false);
 
     const TIMEOUT_MS = 60 * 1000; // 60s 内未完成视为失败，避免无限等待
     const formData = new FormData();
@@ -129,12 +154,11 @@ function uploadFile(file) {
     xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && e.total > 0) {
             const percent = Math.round((e.loaded / e.total) * 100);
-            setProgress(percent, `正在上传 ${percent}%`);
+            setUploadProgress(percent, `${percent}%`, false);
         }
     };
     xhr.onload = () => {
         state.uploading = false;
-        elements.progressRow.classList.add("is-hidden");
         let data = null;
         try {
             data = JSON.parse(xhr.responseText);
@@ -142,17 +166,15 @@ function uploadFile(file) {
             data = null;
         }
         if (xhr.status >= 400 || !data || data.status !== "success") {
-            setProgress(0, "");
-            const message = data?.detail || `上传失败 (HTTP ${xhr.status})`;
-            elements.fileState.textContent = "上传失败";
-            elements.fileState.classList.remove("is-hidden");
-            elements.fileState.style.color = "#dc2626";
+            const message = data?.detail || `HTTP ${xhr.status}`;
+            setUploadProgress(0, "", true);
+            setUploadDone(false);
             setError("上传失败: " + message);
         } else {
             state.uploadId = data.upload_id;
-            elements.fileState.textContent = "✓ 已上传";
-            elements.fileState.style.color = "";
-            elements.fileState.classList.remove("is-hidden");
+            state.uploadDuration = data.duration;
+            setUploadProgress(100, "", false);
+            setUploadDone(true);
             const dur = formatDuration(data.duration);
             elements.fileMeta.textContent = `${formatSize(data.size)}${dur ? " · " + dur : ""}`;
         }
@@ -160,19 +182,15 @@ function uploadFile(file) {
     };
     xhr.onerror = () => {
         state.uploading = false;
-        elements.progressRow.classList.add("is-hidden");
-        elements.fileState.textContent = "上传失败";
-        elements.fileState.style.color = "#dc2626";
-        elements.fileState.classList.remove("is-hidden");
+        setUploadProgress(0, "", true);
+        setUploadDone(false);
         setError("上传失败: 网络错误，请重试");
         updateButton();
     };
     xhr.ontimeout = () => {
         state.uploading = false;
-        elements.progressRow.classList.add("is-hidden");
-        elements.fileState.textContent = "上传超时";
-        elements.fileState.style.color = "#dc2626";
-        elements.fileState.classList.remove("is-hidden");
+        setUploadProgress(0, "", true);
+        setUploadDone(false);
         setError("上传超时：服务端未在 60 秒内响应，请确认服务已启动后重试");
         updateButton();
     };
@@ -216,19 +234,21 @@ elements.transcribeBtn.addEventListener("click", async () => {
 
     state.busy = true;
     updateButton();
-    elements.modelTag.textContent =
-        elements.modelSelect.options[elements.modelSelect.selectedIndex]?.text || "";
-    elements.timeCost.textContent = "";
+    elements.timeCost.textContent = "00:00";
     elements.resultCard.classList.remove("is-hidden");
     elements.resultText.value = "正在转写，长录音会分段处理，请稍候...";
     setSuccess();
+
+    const start = performance.now();
+    state.timer = setInterval(() => {
+        elements.timeCost.textContent = formatClock((performance.now() - start) / 1000);
+    }, 250);
 
     const formData = new FormData();
     formData.append("upload_id", state.uploadId);
     formData.append("model", elements.modelSelect.value);
     formData.append("use_punctuation", true);
 
-    const start = performance.now();
     try {
         const res = await fetch("/api/transcribe", { method: "POST", body: formData });
         const elapsed = ((performance.now() - start) / 1000).toFixed(2);
@@ -239,15 +259,13 @@ elements.transcribeBtn.addEventListener("click", async () => {
         const data = await res.json();
         setSuccess();
         elements.resultText.value = data.text || "(未识别到有效语音内容)";
-        const paraTag =
-            data.paragraphs > 1 ? `共 ${data.paragraphs} 段 · ` : "";
+        const paraTag = data.paragraphs > 1 ? `共 ${data.paragraphs} 段 · ` : "";
         elements.timeCost.textContent =
             `${paraTag}耗时 ${elapsed}s / 推理 ${data.inference_time}s`;
-        elements.modelTag.textContent =
-            state.models.find((m) => m.id === data.model)?.label || data.model;
     } catch (err) {
         setError("请求出错，请检查服务端连接: " + err.message);
     } finally {
+        clearInterval(state.timer);
         state.busy = false;
         updateButton();
     }
