@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -22,6 +23,13 @@ SUPPORTED_AUDIO_EXTENSIONS = frozenset(
     {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus",
      ".wma", ".amr", ".aif", ".aiff", ".webm"}
 )
+
+_UPLOAD_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def is_valid_upload_id(upload_id: str) -> bool:
+    """Upload ids are uuid4().hex; reject anything else before it hits the filesystem."""
+    return bool(_UPLOAD_ID_RE.fullmatch(upload_id or ""))
 
 
 class UploadStore:
@@ -80,6 +88,8 @@ class UploadStore:
         return meta
 
     def get(self, upload_id: str) -> dict | None:
+        if not is_valid_upload_id(upload_id):
+            return None
         meta_path = self._dir(upload_id) / "meta.json"
         if not meta_path.is_file():
             return None

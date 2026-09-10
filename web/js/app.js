@@ -19,21 +19,15 @@ const elements = {
     statTag: document.getElementById("statTag"),
     copyBtn: document.getElementById("copyBtn"),
     exportBtn: document.getElementById("exportBtn"),
+    toast: document.getElementById("toast"),
 };
 
-// 允许上传的音频格式白名单（与 app/uploads.py 的 SUPPORTED_AUDIO_EXTENSIONS 保持一致）。
+// 允许上传的音频扩展名白名单（与 app/uploads.py 的 SUPPORTED_AUDIO_EXTENSIONS 保持一致）。
+// 前后端统一按扩展名校验：没有已知扩展名的文件一律不接受。
 const SUPPORTED_EXTENSIONS = new Set([
     "mp3", "wav", "m4a", "aac", "flac", "ogg", "opus",
     "wma", "amr", "aif", "aiff", "webm",
 ]);
-const SUPPORTED_MIME_TYPES = new Set([
-    "audio/mpeg", "audio/wav", "audio/x-wav", "audio/wave",
-    "audio/mp4", "audio/x-m4a", "audio/aac", "audio/aacp",
-    "audio/flac", "audio/x-flac", "audio/ogg", "application/ogg",
-    "audio/opus", "audio/x-ms-wma", "audio/amr", "audio/aiff",
-    "audio/x-aiff", "audio/webm",
-]);
-const SUPPORTED_FORMATS_HINT = "MP3/WAV/M4A/AAC/FLAC/OGG/OPUS";
 
 const state = {
     models: [],
@@ -47,6 +41,7 @@ const state = {
     timer: null,
     progressTimer: null,
     exportBaseName: "transcript",
+    toastTimer: null,
 };
 
 function formatSize(bytes) {
@@ -129,6 +124,16 @@ function hideTranscriptStats() {
     elements.statTag.classList.add("is-hidden");
 }
 
+function showToast(message) {
+    elements.toast.textContent = message;
+    elements.toast.classList.remove("is-hidden");
+    if (state.toastTimer) clearTimeout(state.toastTimer);
+    state.toastTimer = setTimeout(() => {
+        elements.toast.classList.add("is-hidden");
+        state.toastTimer = null;
+    }, 3000);
+}
+
 async function readError(res) {
     try {
         const body = await res.json();
@@ -185,27 +190,14 @@ function fileExtension(name) {
 }
 
 function isSupportedAudioFile(file) {
-    const ext = fileExtension(file.name);
-    if (ext) return SUPPORTED_EXTENSIONS.has(ext);
-    // 个别系统不保留扩展名时，退而检查浏览器上报的 MIME 类型。
-    return SUPPORTED_MIME_TYPES.has((file.type || "").toLowerCase());
+    return SUPPORTED_EXTENSIONS.has(fileExtension(file.name));
 }
 
 function rejectUnsupportedFile(file) {
     if (state.busy || state.uploading) return;
-    resetFileInfo(file);
-    setUploadProgress(
-        0,
-        `不支持 ${extLabel(file.name)} 文件，仅支持 ${SUPPORTED_FORMATS_HINT} 等音频`,
-        true
-    );
-    setUploadDone(false);
-    updateButton();
-}
-
-function extLabel(name) {
-    const ext = fileExtension(name);
-    return ext ? ext.toUpperCase() : "该";
+    // 非法类型不写入文件框，也不清空已有文件（可能保留了上次上传的信息）。
+    const ext = fileExtension(file.name);
+    showToast(ext ? `不支持 ${ext.toUpperCase()} 格式的文件` : "不支持无扩展名的文件");
 }
 
 function handleFile(file) {

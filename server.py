@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -134,7 +135,10 @@ def transcribe_audio(
 
     model_id = model or manager.default_model_id
     source_path = meta["path"]
-    wav_path = os.path.join(os.path.dirname(source_path), "converted.16k.wav")
+    # 每次请求单独一份中间 WAV，避免同一 upload 并发转写互相覆盖 / 删除。
+    wav_path = os.path.join(
+        os.path.dirname(source_path), f"converted.{uuid.uuid4().hex}.16k.wav"
+    )
 
     job = {"cancel_event": threading.Event(), "done": 0, "total": 0}
     _set_job(upload_id, job)
@@ -154,7 +158,9 @@ def transcribe_audio(
         with concurrency_gate:
             if cancel_event.is_set():
                 raise TranscriptionCancelled()
-            convert_to_16k_mono_wav(source_path, wav_path)
+            convert_to_16k_mono_wav(
+                source_path, wav_path, should_cancel=cancel_event.is_set
+            )
             if cancel_event.is_set():
                 raise TranscriptionCancelled()
             if MAX_AUDIO_SECONDS:

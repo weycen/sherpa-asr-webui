@@ -118,6 +118,8 @@ def transcribe_audio_file(
 
     out_texts = []
     for group in paragraphs:
+        if should_cancel():
+            raise TranscriptionCancelled()
         raw = ""
         for text in group:
             raw = _join_segments(raw, text)
