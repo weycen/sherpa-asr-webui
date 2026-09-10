@@ -6,20 +6,27 @@ import tempfile
 import threading
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 from app.config import DEFAULT_MODELS_FILE, ROOT_DIR, load_models
 from app.model_manager import ModelLoadError, ModelManager, ModelNotFoundError
 from app.pipeline import transcribe_audio_file
+from app.postprocess import text_stats
 from app.punctuator import Punctuator
 from app.transcriber import (
+    TranscriptionCancelled,
     TranscriptionError,
     audio_seconds,
     convert_to_16k_mono_wav,
     ffprobe_duration,
 )
-from app.uploads import UploadStore, UploadTooLarge
+from app.uploads import (
+    SUPPORTED_AUDIO_EXTENSIONS,
+    UploadStore,
+    UploadTooLarge,
+    UnsupportedFileType,
+)
 from app.vad import Segmenter
 
 WEB_DIR = ROOT_DIR / "web"
@@ -53,7 +60,27 @@ segmenter = Segmenter(VAD_SPEC) if VAD_SPEC else None
 upload_store = UploadStore(UPLOAD_ROOT)
 concurrency_gate = threading.BoundedSemaphore(MAX_CONCURRENT)
 
+# 进行中的转写任务：upload_id -> {"cancel_event", "done", "total"}。
+_job_lock = threading.Lock()
+_jobs: dict[str, dict] = {}
+
 app = FastAPI(title="Sherpa ASR WebUI")
+
+
+def _get_job(upload_id: str) -> dict | None:
+    with _job_lock:
+        return _jobs.get(upload_id)
+
+
+def _set_job(upload_id: str, job: dict):
+    with _job_lock:
+        _jobs[upload_id] = job
+
+
+def _drop_job(upload_id: str, job: dict | None = None):
+    with _job_lock:
+        if job is None or _jobs.get(upload_id) is job:
+            _jobs.pop(upload_id, None)
 
 
 @app.get("/api/models")
@@ -74,6 +101,12 @@ def upload_audio(file: UploadFile = File(...)):
         raise HTTPException(
             status_code=413,
             detail=f"文件超过大小限制 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+        )
+    except UnsupportedFileType:
+        supported = " / ".join(sorted(e.lstrip(".") for e in SUPPORTED_AUDIO_EXTENSIONS)).upper()
+        raise HTTPException(
+            status_code=415,
+            detail=f"不支持的文件类型，仅支持 {supported} 音频",
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"保存上传文件失败: {exc}")
@@ -100,18 +133,30 @@ def transcribe_audio(
         raise HTTPException(status_code=404, detail="上传不存在或已过期，请重新上传")
 
     model_id = model or manager.default_model_id
-    try:
-        runtime = manager.get(model_id)
-    except ModelNotFoundError:
-        raise HTTPException(status_code=404, detail=f"未知模型: {model_id}")
-    except ModelLoadError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-
     source_path = meta["path"]
     wav_path = os.path.join(os.path.dirname(source_path), "converted.16k.wav")
+
+    job = {"cancel_event": threading.Event(), "done": 0, "total": 0}
+    _set_job(upload_id, job)
+
+    def on_progress(done: int, total: int):
+        with _job_lock:
+            current = _jobs.get(upload_id)
+            if current is job:
+                current["done"] = done
+                current["total"] = total
+
+    cancel_event = job["cancel_event"]
     try:
+        runtime = manager.get(model_id)
+        if cancel_event.is_set():
+            raise TranscriptionCancelled()
         with concurrency_gate:
+            if cancel_event.is_set():
+                raise TranscriptionCancelled()
             convert_to_16k_mono_wav(source_path, wav_path)
+            if cancel_event.is_set():
+                raise TranscriptionCancelled()
             if MAX_AUDIO_SECONDS:
                 seconds = audio_seconds(wav_path)
                 if seconds > MAX_AUDIO_SECONDS:
@@ -126,27 +171,58 @@ def transcribe_audio(
                 segmenter,
                 wav_path,
                 use_punctuation=use_punctuation,
+                progress=on_progress,
+                should_cancel=cancel_event.is_set,
             )
+        stats = text_stats(result["text"])
         return {
             "status": "success",
             "model": runtime.spec.id,
             "text": result["text"],
             "paragraphs": result["paragraphs"],
             "segments": result["segments"],
+            "char_count": stats["char_count"],
             "inference_time": result["inference_time"],
             "audio_seconds": result["audio_seconds"],
         }
+    except ModelNotFoundError:
+        raise HTTPException(status_code=404, detail=f"未知模型: {model_id}")
+    except ModelLoadError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except HTTPException:
         raise
+    except TranscriptionCancelled:
+        return {"status": "cancelled", "model": model_id}
     except TranscriptionError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"服务端处理失败: {exc}")
     finally:
+        _drop_job(upload_id, job)
         try:
             os.remove(wav_path)
         except OSError:
             pass
+
+
+@app.post("/api/transcribe/cancel")
+def cancel_transcribe(upload_id: str = Form(...)):
+    job = _get_job(upload_id)
+    if job is not None:
+        job["cancel_event"].set()
+    return {"status": "cancelled"}
+
+
+@app.get("/api/transcribe/progress")
+def transcribe_progress(upload_id: str = Query(...)):
+    job = _get_job(upload_id)
+    if job is None:
+        return {"active": False, "done": 0, "total": 0}
+    return {
+        "active": True,
+        "done": job["done"],
+        "total": job["total"],
+    }
 
 
 if not WEB_DIR.is_dir():

@@ -13,6 +13,17 @@ class UploadTooLarge(Exception):
     pass
 
 
+class UnsupportedFileType(Exception):
+    pass
+
+
+# 允许上传的音频扩展名白名单（与 web/js/app.js 中的列表保持一致）。
+SUPPORTED_AUDIO_EXTENSIONS = frozenset(
+    {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus",
+     ".wma", ".amr", ".aif", ".aiff", ".webm"}
+)
+
+
 class UploadStore:
     def __init__(
         self,
@@ -31,11 +42,14 @@ class UploadStore:
 
     def save(self, upload, max_bytes: int, filename: str) -> dict:
         upload_id = uuid.uuid4().hex
+        ext = os.path.splitext(filename)[1][:10].lower()
+        if ext not in SUPPORTED_AUDIO_EXTENSIONS:
+            raise UnsupportedFileType(filename)
+
         dst_dir = self._dir(upload_id)
         dst_dir.mkdir(parents=True, exist_ok=False)
 
-        suffix = os.path.splitext(filename)[1][:10].lower()
-        raw_path = dst_dir / f"source{suffix or '.audio'}"
+        raw_path = dst_dir / f"source{ext}"
         size = 0
         try:
             with open(raw_path, "wb") as out:

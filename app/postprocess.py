@@ -7,6 +7,10 @@ _HAS_LOWER_LETTER = re.compile(r"[a-z]")
 _STANDALONE_I = re.compile(r"\bi\b")
 _SENTENCE_ENDERS = set("。！？!?；;")
 _FULLWIDTH_TO_ASCII = str.maketrans("，。！？：；", ",.!?:;")
+_CJK_CHAR = re.compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]"
+)
+_LATIN_WORD = re.compile(r"[A-Za-z]+(?:['’-][A-Za-z]+)*")
 
 
 def looks_all_caps(text: str) -> bool:
@@ -38,3 +42,8 @@ def normalize_english_case(text: str) -> str:
 def ascii_punctuation_for_english(text: str) -> str:
     """Map fullwidth punctuation to ASCII, for pure-English transcripts."""
     return text.translate(_FULLWIDTH_TO_ASCII)
+
+
+def text_stats(text: str) -> dict:
+    """Count transcript size: CJK characters + one per Latin word (字)."""
+    return {"char_count": len(_CJK_CHAR.findall(text)) + len(_LATIN_WORD.findall(text))}

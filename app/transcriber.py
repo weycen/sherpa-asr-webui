@@ -8,6 +8,10 @@ class TranscriptionError(Exception):
     """Raised when uploaded audio cannot be turned into text."""
 
 
+class TranscriptionCancelled(Exception):
+    """Raised when the client aborts an in-flight transcription."""
+
+
 def convert_to_16k_mono_wav(input_path: str, output_path: str) -> None:
     cmd = [
         "ffmpeg", "-y", "-i", input_path,

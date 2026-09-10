@@ -11,6 +11,7 @@ from .postprocess import (
     looks_all_caps,
     normalize_english_case,
 )
+from .transcriber import TranscriptionCancelled
 
 PARA_PAUSE_SECONDS = float(os.getenv("ASR_PARA_PAUSE_SECONDS", "1.6"))
 PARA_MAX_SECONDS = float(os.getenv("ASR_PARA_MAX_SECONDS", "50"))
@@ -57,14 +58,28 @@ def transcribe_audio_file(
     segmenter,
     wav_path: str,
     use_punctuation: bool,
+    progress=None,
+    should_cancel=None,
 ) -> dict:
-    """Run the full pipeline and return result metadata + paragraph text."""
+    """Run the full pipeline and return result metadata + paragraph text.
+
+    progress(done, total) is called after every decoded speech chunk.
+    should_cancel() returning True aborts between chunks with
+    TranscriptionCancelled, so a client can stop a long transcription.
+    """
+    if progress is None:
+        progress = lambda done, total: None
+    if should_cancel is None:
+        should_cancel = lambda: False
+
     samples, sample_rate = sf.read(wav_path, dtype="float32")
     samples = np.ascontiguousarray(samples, dtype=np.float32)
 
     total_seconds = len(samples) / sample_rate
 
     chunks = segmenter.split(samples, sample_rate)
+    if should_cancel():
+        raise TranscriptionCancelled()
     if not chunks:
         return {
             "text": "",
@@ -77,7 +92,9 @@ def transcribe_audio_file(
     entries = []  # (start_seconds, duration, raw_text)
     inference = 0.0
     with runtime.lock:
-        for start, chunk in chunks:
+        for i, (start, chunk) in enumerate(chunks):
+            if should_cancel():
+                raise TranscriptionCancelled()
             chunk = np.ascontiguousarray(chunk, dtype=np.float32)
             t0 = time.time()
             stream = runtime.recognizer.create_stream()
@@ -87,6 +104,10 @@ def transcribe_audio_file(
             text = stream.result.text.strip()
             if text:
                 entries.append((start, len(chunk) / sample_rate, text))
+            progress(i + 1, len(chunks))
+
+    if should_cancel():
+        raise TranscriptionCancelled()
 
     paragraphs = _group_paragraphs(
         entries,

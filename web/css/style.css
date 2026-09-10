@@ -233,6 +233,10 @@ h1 {
     white-space: nowrap;
 }
 
+.file-progress-text.is-error {
+    color: var(--danger);
+}
+
 .primary-btn {
     width: 100%;
     height: 44px;
@@ -254,6 +258,14 @@ h1 {
 .primary-btn:disabled {
     background: var(--disabled);
     cursor: not-allowed;
+}
+
+.primary-btn.btn-danger {
+    background: var(--danger);
+}
+
+.primary-btn.btn-danger:hover:not(:disabled) {
+    background: #b91c1c;
 }
 
 .result-header {
@@ -301,6 +313,32 @@ h1 {
 
 .copy-btn:hover {
     background: var(--primary-soft);
+}
+
+.copy-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.export-btn {
+    height: 28px;
+    padding: 0 12px;
+    border: none;
+    border-radius: 6px;
+    background: var(--primary);
+    color: var(--text-on-primary);
+    font-size: 0.8rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.export-btn:hover {
+    background: var(--primary-hover);
+}
+
+.export-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
 .result-box {

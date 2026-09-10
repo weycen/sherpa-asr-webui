@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sherpa ASR 语音转文字</title>
-    <link rel="stylesheet" href="/css/style.css?v=4">
+    <link rel="stylesheet" href="/css/style.css?v=6">
 </head>
 <body>
     <header class="page-head">
@@ -25,8 +25,9 @@
             <div class="dropzone is-compact" id="dropzone" role="button" tabindex="0" aria-label="选择或拖拽音频文件">
                 <div class="dropzone-icon" aria-hidden="true">🎙</div>
                 <div class="dropzone-text">点击选择或拖拽音频文件到此处</div>
-                <div class="dropzone-hint">支持 MP3 / WAV / M4A / AAC / FLAC / OGG 等格式</div>
-                <input type="file" id="fileInput" accept="audio/*">
+                <div class="dropzone-hint">支持 MP3 / WAV / M4A / AAC / FLAC / OGG / OPUS / WMA / AMR / AIFF / WEBM 音频</div>
+                <input type="file" id="fileInput"
+                       accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.wma,.amr,.aif,.aiff,.webm,audio/*">
             </div>
 
             <div class="file-upload-row is-hidden" id="fileUploadRow">
@@ -48,14 +49,17 @@
             <div class="result-header">
                 <span class="result-title">识别结果</span>
                 <div class="result-meta">
+                    <span class="tag is-hidden" id="progressTag" aria-live="polite"></span>
                     <span class="tag" id="timeCost"></span>
+                    <span class="tag is-hidden" id="statTag"></span>
                     <button class="copy-btn" id="copyBtn" type="button">复制文本</button>
+                    <button class="export-btn" id="exportBtn" type="button" disabled>导出文件</button>
                 </div>
             </div>
             <textarea class="result-box" id="resultText" readonly placeholder="等待处理..."></textarea>
         </section>
     </main>
 
-    <script src="/js/app.js?v=4"></script>
+    <script src="/js/app.js?v=6"></script>
 </body>
 </html>

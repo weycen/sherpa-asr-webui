@@ -15,8 +15,25 @@ const elements = {
     resultText: document.getElementById("resultText"),
     resultTitle: document.querySelector(".result-title"),
     timeCost: document.getElementById("timeCost"),
+    progressTag: document.getElementById("progressTag"),
+    statTag: document.getElementById("statTag"),
     copyBtn: document.getElementById("copyBtn"),
+    exportBtn: document.getElementById("exportBtn"),
 };
+
+// 允许上传的音频格式白名单（与 app/uploads.py 的 SUPPORTED_AUDIO_EXTENSIONS 保持一致）。
+const SUPPORTED_EXTENSIONS = new Set([
+    "mp3", "wav", "m4a", "aac", "flac", "ogg", "opus",
+    "wma", "amr", "aif", "aiff", "webm",
+]);
+const SUPPORTED_MIME_TYPES = new Set([
+    "audio/mpeg", "audio/wav", "audio/x-wav", "audio/wave",
+    "audio/mp4", "audio/x-m4a", "audio/aac", "audio/aacp",
+    "audio/flac", "audio/x-flac", "audio/ogg", "application/ogg",
+    "audio/opus", "audio/x-ms-wma", "audio/amr", "audio/aiff",
+    "audio/x-aiff", "audio/webm",
+]);
+const SUPPORTED_FORMATS_HINT = "MP3/WAV/M4A/AAC/FLAC/OGG/OPUS";
 
 const state = {
     models: [],
@@ -24,7 +41,12 @@ const state = {
     uploadDuration: null,
     uploading: false,
     busy: false,
+    cancelRequested: false,
+    cancelling: false,
+    cancelController: null,
     timer: null,
+    progressTimer: null,
+    exportBaseName: "transcript",
 };
 
 function formatSize(bytes) {
@@ -47,14 +69,22 @@ function formatClock(seconds) {
 }
 
 function updateButton() {
-    const ready = state.models.length > 0 && !!state.uploadId && !state.uploading && !state.busy;
+    if (state.busy) {
+        elements.transcribeBtn.classList.add("btn-danger");
+        elements.transcribeBtn.disabled = state.cancelling;
+        elements.transcribeBtn.textContent = state.cancelling ? "正在取消..." : "取消转写";
+        return;
+    }
+    elements.transcribeBtn.classList.remove("btn-danger");
+    const ready = state.models.length > 0 && !!state.uploadId && !state.uploading;
     elements.transcribeBtn.disabled = !ready;
-    elements.transcribeBtn.textContent = state.busy ? "转写中..." : "开始转写";
+    elements.transcribeBtn.textContent = "开始转写";
 }
 
 function setUploadProgress(percent, text, failed) {
     elements.uploadProgressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
     elements.uploadProgressBar.style.background = failed ? "#fecaca" : "#dbeafe";
+    elements.uploadProgressText.classList.toggle("is-error", !!failed);
     if (text) {
         elements.uploadProgressText.textContent = text;
         elements.uploadProgressText.classList.remove("is-hidden");
@@ -75,11 +105,28 @@ function setError(message) {
     elements.resultTitle.textContent = "处理失败";
     elements.resultTitle.classList.add("error-text");
     elements.resultText.value = message;
+    hideTranscriptStats();
+    elements.exportBtn.disabled = true;
 }
 
 function setSuccess() {
     elements.resultTitle.textContent = "识别结果";
     elements.resultTitle.classList.remove("error-text");
+}
+
+function baseName(name) {
+    const idx = name.lastIndexOf(".");
+    return idx > 0 ? name.slice(0, idx) : name;
+}
+
+function showTranscriptStats(charCount) {
+    elements.statTag.textContent = charCount > 0 ? `${charCount} 字` : "";
+    elements.statTag.classList.toggle("is-hidden", charCount <= 0);
+}
+
+function hideTranscriptStats() {
+    elements.statTag.textContent = "";
+    elements.statTag.classList.add("is-hidden");
 }
 
 async function readError(res) {
@@ -132,8 +179,41 @@ function resetFileInfo(file) {
     setUploadProgress(0, "", false);
 }
 
+function fileExtension(name) {
+    const idx = name.lastIndexOf(".");
+    return idx >= 0 ? name.slice(idx + 1).toLowerCase() : "";
+}
+
+function isSupportedAudioFile(file) {
+    const ext = fileExtension(file.name);
+    if (ext) return SUPPORTED_EXTENSIONS.has(ext);
+    // 个别系统不保留扩展名时，退而检查浏览器上报的 MIME 类型。
+    return SUPPORTED_MIME_TYPES.has((file.type || "").toLowerCase());
+}
+
+function rejectUnsupportedFile(file) {
+    if (state.busy || state.uploading) return;
+    resetFileInfo(file);
+    setUploadProgress(
+        0,
+        `不支持 ${extLabel(file.name)} 文件，仅支持 ${SUPPORTED_FORMATS_HINT} 等音频`,
+        true
+    );
+    setUploadDone(false);
+    updateButton();
+}
+
+function extLabel(name) {
+    const ext = fileExtension(name);
+    return ext ? ext.toUpperCase() : "该";
+}
+
 function handleFile(file) {
     if (state.busy || state.uploading) return;
+    if (!isSupportedAudioFile(file)) {
+        rejectUnsupportedFile(file);
+        return;
+    }
     resetFileInfo(file);
     updateButton();
     uploadFile(file);
@@ -229,20 +309,73 @@ elements.dropzone.addEventListener("drop", (e) => {
     if (file) handleFile(file);
 });
 
+function setCancelledMessage() {
+    elements.resultTitle.textContent = "已取消转写";
+    elements.resultTitle.classList.remove("error-text");
+    elements.resultText.value = "本次转写已取消，可重新点击「开始转写」继续。";
+    hideTranscriptStats();
+    elements.exportBtn.disabled = true;
+}
+
+async function cancelTranscription() {
+    state.cancelRequested = true;
+    state.cancelling = true;
+    updateButton();
+    try {
+        const body = new URLSearchParams();
+        body.append("upload_id", state.uploadId);
+        await fetch("/api/transcribe/cancel", { method: "POST", body });
+    } catch {
+        // 通知失败也照常中止本地请求。
+    }
+    if (state.cancelController) state.cancelController.abort();
+}
+
 elements.transcribeBtn.addEventListener("click", async () => {
-    if (!state.uploadId || state.busy || state.uploading) return;
+    if (state.busy) {
+        cancelTranscription();
+        return;
+    }
+    if (!state.uploadId || state.uploading) return;
 
     state.busy = true;
+    state.cancelRequested = false;
+    state.cancelling = false;
+    state.exportBaseName = baseName(elements.fileName.textContent.trim()) || "transcript";
     updateButton();
+
     elements.timeCost.textContent = "00:00";
+    hideTranscriptStats();
+    elements.exportBtn.disabled = true;
     elements.resultCard.classList.remove("is-hidden");
     elements.resultText.value = "正在转写，长录音会分段处理，请稍候...";
     setSuccess();
+    elements.progressTag.textContent = "准备中...";
+    elements.progressTag.classList.remove("is-hidden");
 
     const start = performance.now();
     state.timer = setInterval(() => {
         elements.timeCost.textContent = formatClock((performance.now() - start) / 1000);
     }, 250);
+
+    const controller = new AbortController();
+    state.cancelController = controller;
+
+    // 分段解码是串行的，轮询服务端拿已完成段数并实时显示 n/m。
+    state.progressTimer = setInterval(async () => {
+        if (!state.uploadId || state.cancelRequested) return;
+        try {
+            const url = `/api/transcribe/progress?upload_id=${encodeURIComponent(state.uploadId)}`;
+            const res = await fetch(url);
+            if (!res.ok) return;
+            const data = await res.json();
+            if (!data.active) return;
+            elements.progressTag.textContent =
+                data.total > 0 ? `分段 ${data.done}/${data.total}` : "分段检测中...";
+        } catch {
+            // 轮询失败静默，转写主请求会报告真实结果。
+        }
+    }, 500);
 
     const formData = new FormData();
     formData.append("upload_id", state.uploadId);
@@ -250,23 +383,42 @@ elements.transcribeBtn.addEventListener("click", async () => {
     formData.append("use_punctuation", true);
 
     try {
-        const res = await fetch("/api/transcribe", { method: "POST", body: formData });
+        const res = await fetch("/api/transcribe", {
+            method: "POST",
+            body: formData,
+            signal: controller.signal,
+        });
         const elapsed = ((performance.now() - start) / 1000).toFixed(2);
         if (!res.ok) {
             setError("转写失败: " + (await readError(res)));
             return;
         }
         const data = await res.json();
+        if (data.status === "cancelled") {
+            setCancelledMessage();
+            return;
+        }
         setSuccess();
+        const hasText = !!(data.text && data.text.trim());
         elements.resultText.value = data.text || "(未识别到有效语音内容)";
-        const paraTag = data.paragraphs > 1 ? `共 ${data.paragraphs} 段 · ` : "";
         elements.timeCost.textContent =
-            `${paraTag}耗时 ${elapsed}s / 推理 ${data.inference_time}s`;
+            `耗时 ${elapsed}s / 推理 ${data.inference_time}s`;
+        showTranscriptStats(data.char_count || 0);
+        elements.exportBtn.disabled = !hasText;
     } catch (err) {
-        setError("请求出错，请检查服务端连接: " + err.message);
+        if (state.cancelRequested || err.name === "AbortError") {
+            setCancelledMessage();
+        } else {
+            setError("请求出错，请检查服务端连接: " + err.message);
+        }
     } finally {
         clearInterval(state.timer);
+        clearInterval(state.progressTimer);
+        state.cancelController = null;
         state.busy = false;
+        state.cancelling = false;
+        elements.progressTag.textContent = "";
+        elements.progressTag.classList.add("is-hidden");
         updateButton();
     }
 });
@@ -285,6 +437,21 @@ elements.copyBtn.addEventListener("click", async () => {
     setTimeout(() => {
         elements.copyBtn.textContent = oldText;
     }, 1500);
+});
+
+elements.exportBtn.addEventListener("click", () => {
+    const text = elements.resultText.value;
+    if (!text.trim()) return;
+
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${state.exportBaseName}.txt`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
 loadModels();
