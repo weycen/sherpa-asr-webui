@@ -6,6 +6,7 @@ import sys
 import numpy as np
 import sherpa_onnx
 
+from .chunking import Chunk, midpoint_chunks, plan
 from .config import VadSpec
 
 
@@ -39,34 +40,60 @@ class Segmenter:
         self._vad = sherpa_onnx.VoiceActivityDetector(config)
         return self._vad
 
-    def split(self, samples: np.ndarray, sample_rate: int) -> list[tuple[float, np.ndarray]]:
-        """Return (start_seconds, float32 samples) speech chunks."""
+    def detect(self, samples: np.ndarray, sample_rate: int) -> list[tuple[int, int]]:
+        """Return (start_sample, end_sample) spans of detected speech only."""
         samples = np.ascontiguousarray(samples, dtype=np.float32)
-        total = len(samples) / sample_rate
         vad = self._load()
         if vad is None:
             # Fallback: fixed windows, keeps long files usable without the VAD model.
             window = max(int(self._spec.max_speech_duration * sample_rate), sample_rate)
-            return [
-                (i / sample_rate, samples[i : i + window])
-                for i in range(0, len(samples), window)
-            ]
+            return [(i, min(i + window, len(samples))) for i in range(0, len(samples), window)]
 
         step = int(0.5 * sample_rate)
         for i in range(0, len(samples), step):
             vad.accept_waveform(samples[i : i + step])
         vad.flush()
 
-        chunks = []
+        spans = []
         while not vad.empty():
             segment = vad.front
-            seg_samples = np.ascontiguousarray(
-                np.asarray(segment.samples, dtype=np.float32)
-            )
-            if len(seg_samples) == 0:
-                vad.pop()
-                continue
-            start = segment.start / sample_rate
-            chunks.append((min(start, total), seg_samples))
+            start = int(segment.start)
+            length = len(np.asarray(segment.samples))
             vad.pop()
-        return chunks
+            if length:
+                spans.append((max(0, start), min(start + length, len(samples))))
+        return spans
+
+    def split(
+        self,
+        samples: np.ndarray,
+        sample_rate: int,
+        mode: str = "planner",
+        max_seconds: float = 0.0,
+        overlap_seconds: float = 0.0,
+    ) -> list[Chunk]:
+        """Turn speech spans into ASR chunks.
+
+        mode="legacy"   cut at the VAD speech bounds (clips onset/offset audio)
+        mode="midpoint" cut at silence midpoints, no duration bound
+        mode="planner"  midpoint cuts plus a max-duration cap with overlap
+        """
+        samples = np.ascontiguousarray(samples, dtype=np.float32)
+        spans = self.detect(samples, sample_rate)
+        if not spans:
+            return []
+        if mode == "legacy":
+            return [
+                Chunk(
+                    a,
+                    b,
+                    a,
+                    b,
+                    "audio_start" if i == 0 else "natural_silence",
+                    "audio_end" if i == len(spans) - 1 else "natural_silence",
+                )
+                for i, (a, b) in enumerate(spans)
+            ]
+        if mode == "midpoint":
+            return midpoint_chunks(spans, len(samples))
+        return plan(spans, len(samples), sample_rate, max_seconds, overlap_seconds)

@@ -6,6 +6,7 @@ import time
 import numpy as np
 import soundfile as sf
 
+from .chunking import slice_audio
 from .postprocess import (
     ascii_punctuation_for_english,
     looks_all_caps,
@@ -16,6 +17,59 @@ from .transcriber import TranscriptionCancelled
 PARA_PAUSE_SECONDS = float(os.getenv("ASR_PARA_PAUSE_SECONDS", "1.6"))
 PARA_MAX_SECONDS = float(os.getenv("ASR_PARA_MAX_SECONDS", "50"))
 PARA_MAX_CHARS = int(os.getenv("ASR_PARA_MAX_CHARS", "400"))
+
+# ASR chunking (see app/chunking.py). Strategy: legacy | midpoint | planner.
+CHUNK_STRATEGY = os.getenv("ASR_CHUNK_STRATEGY", "planner")
+CHUNK_MAX_SECONDS = float(os.getenv("ASR_CHUNK_MAX_SECONDS", "15"))
+CHUNK_OVERLAP_SECONDS = float(os.getenv("ASR_CHUNK_OVERLAP_SECONDS", "2.0"))
+# A repeated character is treated as a boundary artefact (a word split across
+# two chunks) only when both copies come from the same moment in time.
+BOUNDARY_DUP_SECONDS = float(os.getenv("ASR_BOUNDARY_DUP_SECONDS", "0.35"))
+
+
+def _chunk_tokens(result, chunk, sample_rate: int, limit: float):
+    """Return [(token, global_time)] for tokens newer than `limit`.
+
+    Returns (None, text) when the model gives no usable timestamps so the
+    caller can fall back to plain text handling.
+    """
+    tokens = list(getattr(result, "tokens", []) or [])
+    stamps = list(getattr(result, "timestamps", []) or [])
+    if not tokens or len(stamps) != len(tokens):
+        return None, result.text.strip()
+    base = chunk.audio_start / sample_rate
+    kept = []
+    last = limit
+    for token, ts in zip(tokens, stamps):
+        global_ts = base + ts
+        if global_ts > last + 1e-3:
+            kept.append((token, global_ts))
+            last = global_ts
+    return kept, ""
+
+
+def _is_cjk(ch: str) -> bool:
+    o = ord(ch)
+    return (
+        0x3400 <= o <= 0x9FFF
+        or 0xF900 <= o <= 0xFAFF
+        or 0x3040 <= o <= 0x30FF
+        or 0xAC00 <= o <= 0xD7AF
+    )
+
+
+def _strip_boundary_repeat(prev: str, cur: str, max_chars: int = 4) -> str:
+    """Drop a CJK suffix/prefix repeat introduced by an overlapping cut.
+
+    Only used when two chunks actually overlap in audio, so natural (non
+    overlapping) boundaries are never altered.
+    """
+    limit = min(max_chars, len(prev), len(cur))
+    for k in range(limit, 0, -1):
+        seg = prev[-k:]
+        if seg == cur[:k] and all(_is_cjk(c) for c in seg):
+            return cur[k:]
+    return cur
 
 
 def _join_segments(a: str, b: str) -> str:
@@ -77,7 +131,13 @@ def transcribe_audio_file(
 
     total_seconds = len(samples) / sample_rate
 
-    chunks = segmenter.split(samples, sample_rate)
+    chunks = segmenter.split(
+        samples,
+        sample_rate,
+        mode=CHUNK_STRATEGY,
+        max_seconds=CHUNK_MAX_SECONDS,
+        overlap_seconds=CHUNK_OVERLAP_SECONDS,
+    )
     if should_cancel():
         raise TranscriptionCancelled()
     if not chunks:
@@ -90,20 +150,56 @@ def transcribe_audio_file(
         }
 
     entries = []  # (start_seconds, duration, raw_text)
+    chunk_debug = []
     inference = 0.0
+    last_gt = -1.0
+    acc_text = ""
+    last_kept = None  # (char, global_time) of the previous chunk's last token
     with runtime.lock:
-        for i, (start, chunk) in enumerate(chunks):
+        for i, chunk in enumerate(chunks):
             if should_cancel():
                 raise TranscriptionCancelled()
-            chunk = np.ascontiguousarray(chunk, dtype=np.float32)
+            audio = slice_audio(samples, chunk)
             t0 = time.time()
             stream = runtime.recognizer.create_stream()
-            stream.accept_waveform(sample_rate, chunk)
+            stream.accept_waveform(sample_rate, audio)
             runtime.recognizer.decode_stream(stream)
             inference += time.time() - t0
-            text = stream.result.text.strip()
+            kept, raw_text = _chunk_tokens(stream.result, chunk, sample_rate, last_gt)
+            if kept is None:
+                text = _strip_boundary_repeat(acc_text, raw_text)
+            else:
+                # Drop a leading token only if it repeats the previous chunk's
+                # last token from the very same moment (a split word), not when
+                # the speaker genuinely repeated it later.
+                if (
+                    kept
+                    and last_kept
+                    and kept[0][0] == last_kept[0]
+                    and kept[0][1] - last_kept[1] <= BOUNDARY_DUP_SECONDS
+                ):
+                    kept = kept[1:]
+                text = "".join(token for token, _ in kept)
+                if kept:
+                    last_kept = kept[-1]
+                    last_gt = kept[-1][1]
+            acc_text += text
             if text:
-                entries.append((start, len(chunk) / sample_rate, text))
+                duration = (chunk.speech_end - chunk.speech_start) / sample_rate
+                entries.append((chunk.speech_start / sample_rate, duration, text))
+            chunk_debug.append(
+                {
+                    "chunk_id": i,
+                    "audio_start": round(chunk.audio_start / sample_rate, 3),
+                    "audio_end": round(chunk.audio_end / sample_rate, 3),
+                    "speech_start": round(chunk.speech_start / sample_rate, 3),
+                    "speech_end": round(chunk.speech_end / sample_rate, 3),
+                    "boundary_before": chunk.boundary_before,
+                    "boundary_after": chunk.boundary_after,
+                    "overlap_after": round(chunk.overlap_after / sample_rate, 3),
+                    "text": text,
+                }
+            )
             progress(i + 1, len(chunks))
 
     if should_cancel():
@@ -138,4 +234,5 @@ def transcribe_audio_file(
         "inference_time": round(inference, 3),
         "segments": len(entries),
         "audio_seconds": round(total_seconds, 1),
+        "chunks": chunk_debug,
     }
