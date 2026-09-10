@@ -44,6 +44,35 @@ class UploadStore:
         self.ttl_seconds = ttl_seconds
         self.max_items = max_items
         self._lock = threading.Lock()
+        self._active: set[str] = set()
+
+    def activate(self, upload_id: str) -> None:
+        """Mark an upload as busy so prune() never touches it mid-transcription."""
+        with self._lock:
+            self._active.add(upload_id)
+
+    def deactivate(self, upload_id: str) -> None:
+        with self._lock:
+            self._active.discard(upload_id)
+
+    @staticmethod
+    def _clean_converted(directory: Path) -> int:
+        removed = 0
+        for stale in directory.glob("converted.*"):
+            try:
+                stale.unlink()
+                removed += 1
+            except OSError:
+                pass
+        return removed
+
+    def cleanup_orphan_wavs(self) -> int:
+        """Delete leftover converted WAVs. Call once at startup, before serving."""
+        removed = 0
+        for entry in self.root.iterdir():
+            if entry.is_dir():
+                removed += self._clean_converted(entry)
+        return removed
 
     def _dir(self, upload_id: str) -> Path:
         return self.root / upload_id
@@ -129,6 +158,7 @@ class UploadStore:
     def prune(self):
         now = time.time()
         with self._lock:
+            active = set(self._active)
             items = sorted(
                 (
                     (p, (p / "meta.json").stat().st_mtime if (p / "meta.json").is_file() else 0)
@@ -138,6 +168,10 @@ class UploadStore:
                 key=lambda x: x[1],
             )
             for path, mtime in items:
+                if path.name in active:
+                    continue
                 if now - mtime > self.ttl_seconds or len(items) > self.max_items:
                     self.delete(path.name)
                     items = [x for x in items if x[0] != path]
+                else:
+                    self._clean_converted(path)

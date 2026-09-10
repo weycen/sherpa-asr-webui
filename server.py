@@ -142,6 +142,7 @@ def transcribe_audio(
 
     job = {"cancel_event": threading.Event(), "done": 0, "total": 0}
     _set_job(upload_id, job)
+    upload_store.activate(upload_id)
 
     def on_progress(done: int, total: int):
         with _job_lock:
@@ -205,6 +206,7 @@ def transcribe_audio(
         raise HTTPException(status_code=500, detail=f"服务端处理失败: {exc}")
     finally:
         _drop_job(upload_id, job)
+        upload_store.deactivate(upload_id)
         try:
             os.remove(wav_path)
         except OSError:
@@ -245,4 +247,7 @@ if __name__ == "__main__":
     print(f"默认模型: {manager.default_model_id}")
     print(f"上传大小上限: {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
     print(f"并发转写上限: {MAX_CONCURRENT}")
+    swept = upload_store.cleanup_orphan_wavs()
+    if swept:
+        print(f"已清理上次异常退出残留的中间文件: {swept} 个")
     uvicorn.run(app, host=HOST, port=PORT)
