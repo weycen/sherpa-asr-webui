@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sherpa ASR 语音转文字</title>
-    <link rel="stylesheet" href="/css/style.css?v=10">
+    <link rel="stylesheet" href="/css/style.css?v=14">
 </head>
 <body>
     <div id="toast" class="toast is-hidden" role="status" aria-live="polite"></div>
@@ -14,15 +14,24 @@
     </header>
 
     <main class="container">
-        <section class="card" aria-label="转写控制台">
+        <section class="card card-compact" aria-label="模型设置">
             <div class="tool-row">
-                <label class="field-label" for="modelSelect">模型选择</label>
+                <label class="field-label" for="modelSelect">语音模型</label>
                 <select id="modelSelect" class="select" disabled>
                     <option>正在加载模型列表...</option>
                 </select>
                 <span id="modelStatus" class="status-text"></span>
             </div>
 
+            <div class="tool-row">
+                <label class="field-label" for="punctSelect">标点模型</label>
+                <select id="punctSelect" class="select" disabled>
+                    <option>正在加载标点模型...</option>
+                </select>
+            </div>
+        </section>
+
+        <section class="card" aria-label="转写控制台">
             <div class="dropzone is-compact" id="dropzone" role="button" tabindex="0" aria-label="选择或拖拽音频文件">
                 <div class="dropzone-icon" aria-hidden="true">🎙</div>
                 <div class="dropzone-text">点击选择或拖拽音频文件到此处</div>
@@ -61,6 +70,6 @@
         </section>
     </main>
 
-    <script src="/js/app.js?v=10"></script>
+    <script src="/js/app.js?v=14"></script>
 </body>
 </html>

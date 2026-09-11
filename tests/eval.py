@@ -29,9 +29,10 @@ from app.model_manager import ModelManager
 from app.punctuator import Punctuator
 from app.vad import Segmenter
 
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WAVS = os.getenv(
     "ASR_TEST_WAVS",
-    "/home/weycen/asr-service/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/test_wavs",
+    os.path.join(_ROOT, "models", "asr", "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09", "test_wavs"),
 )
 
 # (case name, [(utterance, silence_after_seconds or None for glued/continuous)])
@@ -86,8 +87,9 @@ def build_case(name, parts, workdir):
 
 
 def main():
-    default, specs, punct_spec, vad_spec = load_models()
+    default, specs, punct_specs, default_punct, vad_spec = load_models()
     runtime = ModelManager(specs, default).get(default)
+    punct_spec = next((s for s in punct_specs if s.id == default_punct), punct_specs[0] if punct_specs else None)
     punctuator = Punctuator(punct_spec) if punct_spec else None
     segmenter = Segmenter(vad_spec)
 

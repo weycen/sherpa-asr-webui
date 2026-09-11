@@ -11,6 +11,7 @@ const elements = {
     transcribeBtn: document.getElementById("transcribeBtn"),
     modelSelect: document.getElementById("modelSelect"),
     modelStatus: document.getElementById("modelStatus"),
+    punctSelect: document.getElementById("punctSelect"),
     resultCard: document.getElementById("resultCard"),
     resultText: document.getElementById("resultText"),
     resultTitle: document.querySelector(".result-title"),
@@ -164,6 +165,21 @@ async function loadModels() {
         const readyCount = state.models.filter((m) => m.ready).length;
         elements.modelStatus.textContent =
             readyCount > 0 ? `${readyCount} 个模型已加载` : `${state.models.length} 个模型可用`;
+
+        elements.punctSelect.replaceChildren();
+        const off = document.createElement("option");
+        off.value = "none";
+        off.textContent = "关闭";
+        elements.punctSelect.appendChild(off);
+        for (const punct of data.punctuations || []) {
+            const option = document.createElement("option");
+            option.value = punct.id;
+            option.textContent = punct.label;
+            elements.punctSelect.appendChild(option);
+        }
+        elements.punctSelect.value = data.default_punctuation || "none";
+        elements.punctSelect.disabled = (data.punctuations || []).length === 0;
+
         updateButton();
     } catch (err) {
         elements.modelSelect.replaceChildren();
@@ -171,6 +187,11 @@ async function loadModels() {
         option.textContent = "模型列表加载失败";
         elements.modelSelect.appendChild(option);
         elements.modelStatus.textContent = err.message;
+        elements.punctSelect.replaceChildren();
+        const off = document.createElement("option");
+        off.value = "none";
+        off.textContent = "关闭";
+        elements.punctSelect.appendChild(off);
     }
 }
 
@@ -372,7 +393,7 @@ elements.transcribeBtn.addEventListener("click", async () => {
     const formData = new FormData();
     formData.append("upload_id", state.uploadId);
     formData.append("model", elements.modelSelect.value);
-    formData.append("use_punctuation", true);
+    formData.append("punctuation_model", elements.punctSelect.value);
 
     try {
         const res = await fetch("/api/transcribe", {

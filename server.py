@@ -14,7 +14,7 @@ from app.config import DEFAULT_MODELS_FILE, ROOT_DIR, load_models
 from app.model_manager import ModelLoadError, ModelManager, ModelNotFoundError
 from app.pipeline import transcribe_audio_file
 from app.postprocess import text_stats
-from app.punctuator import Punctuator
+from app.punctuator import PunctuationManager, PunctuationNotFoundError
 from app.transcriber import (
     TranscriptionCancelled,
     TranscriptionError,
@@ -50,13 +50,13 @@ UPLOAD_ROOT = os.getenv("ASR_UPLOAD_DIR") or str(
 
 # 配置文件缺失/非法属于启动期错误；模型本体按需懒加载，缺文件只影响对应模型。
 try:
-    DEFAULT_MODEL_ID, MODEL_SPECS, PUNCT_SPEC, VAD_SPEC = load_models(MODELS_FILE)
+    DEFAULT_MODEL_ID, MODEL_SPECS, PUNCT_SPECS, DEFAULT_PUNCT_ID, VAD_SPEC = load_models(MODELS_FILE)
 except Exception as exc:
     print(f"[错误] 加载模型配置失败: {exc}", file=sys.stderr)
     sys.exit(1)
 
 manager = ModelManager(MODEL_SPECS, DEFAULT_MODEL_ID)
-punctuator = Punctuator(PUNCT_SPEC) if PUNCT_SPEC else None
+punctuation_manager = PunctuationManager(PUNCT_SPECS, DEFAULT_PUNCT_ID) if PUNCT_SPECS else None
 segmenter = Segmenter(VAD_SPEC) if VAD_SPEC else None
 upload_store = UploadStore(UPLOAD_ROOT)
 concurrency_gate = threading.BoundedSemaphore(MAX_CONCURRENT)
@@ -84,12 +84,26 @@ def _drop_job(upload_id: str, job: dict | None = None):
             _jobs.pop(upload_id, None)
 
 
+def _resolve_punctuator(use_punctuation: bool, punctuation_model: str):
+    """Pick the requested punctuation model, "" = default, "none" = disabled."""
+    if not use_punctuation or punctuation_model == "none" or punctuation_manager is None:
+        return None
+    punct_id = punctuation_model or punctuation_manager.default_id
+    if not punct_id:
+        return None
+    try:
+        return punctuation_manager.get(punct_id)
+    except PunctuationNotFoundError:
+        raise HTTPException(status_code=404, detail=f"未知标点模型: {punct_id}")
+
+
 @app.get("/api/models")
 def list_models():
     return {
         "default_model": manager.default_model_id,
-        "punctuation_available": bool(punctuator and punctuator.available()),
         "models": manager.list(),
+        "default_punctuation": punctuation_manager.default_id if punctuation_manager else None,
+        "punctuations": punctuation_manager.list() if punctuation_manager else [],
     }
 
 
@@ -128,12 +142,14 @@ def transcribe_audio(
     upload_id: str = Form(...),
     model: str = Form(""),
     use_punctuation: bool = Form(True),
+    punctuation_model: str = Form(""),
 ):
     meta = upload_store.get(upload_id)
     if meta is None:
         raise HTTPException(status_code=404, detail="上传不存在或已过期，请重新上传")
 
     model_id = model or manager.default_model_id
+    punct = _resolve_punctuator(use_punctuation, punctuation_model)
     source_path = meta["path"]
     # 每次请求单独一份中间 WAV，避免同一 upload 并发转写互相覆盖 / 删除。
     wav_path = os.path.join(
@@ -174,10 +190,10 @@ def transcribe_audio(
 
             result = transcribe_audio_file(
                 runtime,
-                punctuator,
+                punct,
                 segmenter,
                 wav_path,
-                use_punctuation=use_punctuation,
+                use_punctuation=punct is not None,
                 progress=on_progress,
                 should_cancel=cancel_event.is_set,
             )
