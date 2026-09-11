@@ -431,19 +431,40 @@ elements.copyBtn.addEventListener("click", async () => {
     }, 1500);
 });
 
-elements.exportBtn.addEventListener("click", () => {
+async function exportTranscript() {
     const text = elements.resultText.value;
     if (!text.trim()) return;
 
+    const filename = `${state.exportBaseName}.txt`;
     const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+
+    // 支持时用系统「另存为」对话框，让用户选位置、改文件名。
+    if (window.showSaveFilePicker) {
+        try {
+            const handle = await window.showSaveFilePicker({
+                suggestedName: filename,
+                types: [{ description: "文本文件", accept: { "text/plain": [".txt"] } }],
+            });
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            return;
+        } catch (err) {
+            if (err && err.name === "AbortError") return; // 用户取消
+            // 其它异常退回普通下载，保证仍能导出。
+        }
+    }
+
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${state.exportBaseName}.txt`;
+    anchor.download = filename;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-});
+}
+
+elements.exportBtn.addEventListener("click", exportTranscript);
 
 loadModels();
