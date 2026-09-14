@@ -1,8 +1,10 @@
 """Temporary upload storage with TTL cleanup."""
 
+import collections
 import json
 import os
 import re
+import shutil
 import tempfile
 import threading
 import time
@@ -44,16 +46,19 @@ class UploadStore:
         self.ttl_seconds = ttl_seconds
         self.max_items = max_items
         self._lock = threading.Lock()
-        self._active: set[str] = set()
+        self._active: collections.Counter = collections.Counter()
 
     def activate(self, upload_id: str) -> None:
         """Mark an upload as busy so prune() never touches it mid-transcription."""
         with self._lock:
-            self._active.add(upload_id)
+            self._active[upload_id] += 1
 
     def deactivate(self, upload_id: str) -> None:
         with self._lock:
-            self._active.discard(upload_id)
+            if self._active[upload_id] <= 1:
+                self._active.pop(upload_id, None)
+            else:
+                self._active[upload_id] -= 1
 
     @staticmethod
     def _clean_converted(directory: Path) -> int:
@@ -143,35 +148,33 @@ class UploadStore:
 
     def delete(self, upload_id: str):
         """Delete one upload dir. Caller must hold self._lock when concurrency matters."""
+        if not is_valid_upload_id(upload_id):
+            return
         dst = self._dir(upload_id)
         if dst.is_dir():
-            for p in dst.glob("*"):
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
-            try:
-                dst.rmdir()
-            except OSError:
-                pass
+            shutil.rmtree(dst, ignore_errors=True)
 
     def prune(self):
         now = time.time()
         with self._lock:
-            active = set(self._active)
-            items = sorted(
-                (
-                    (p, (p / "meta.json").stat().st_mtime if (p / "meta.json").is_file() else 0)
-                    for p in self.root.iterdir()
-                    if p.is_dir()
-                ),
-                key=lambda x: x[1],
-            )
-            for path, mtime in items:
+            active = {uid for uid, cnt in self._active.items() if cnt > 0}
+            item_entries = []
+            for p in self.root.iterdir():
+                if p.is_dir():
+                    try:
+                        meta_file = p / "meta.json"
+                        mtime = meta_file.stat().st_mtime if meta_file.is_file() else 0
+                    except OSError:
+                        mtime = 0
+                    item_entries.append((p, mtime))
+
+            item_entries.sort(key=lambda x: x[1])
+            remaining = len(item_entries)
+            for path, mtime in item_entries:
                 if path.name in active:
                     continue
-                if now - mtime > self.ttl_seconds or len(items) > self.max_items:
+                if now - mtime > self.ttl_seconds or remaining > self.max_items:
                     self.delete(path.name)
-                    items = [x for x in items if x[0] != path]
+                    remaining -= 1
                 else:
                     self._clean_converted(path)
