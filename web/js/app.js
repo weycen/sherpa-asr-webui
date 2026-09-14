@@ -106,12 +106,19 @@ function setUploadDone(ok) {
     elements.fileState.style.display = "inline-block";
 }
 
+function disableActionButtons() {
+    elements.copyBtn.disabled = true;
+    elements.exportBtn.disabled = true;
+    elements.exportSrtBtn.disabled = true;
+    elements.exportVttBtn.disabled = true;
+}
+
 function setError(message) {
     elements.resultTitle.textContent = "处理失败";
     elements.resultTitle.classList.add("error-text");
     elements.resultText.value = message;
     hideTranscriptStats();
-    elements.exportBtn.disabled = true;
+    disableActionButtons();
 }
 
 function setSuccess() {
@@ -219,6 +226,7 @@ function resetFileInfo(file) {
     setUploadProgress(0, "", false);
     renderSegments([]);
     switchView("text");
+    disableActionButtons();
 }
 
 function fileExtension(name) {
@@ -345,7 +353,7 @@ function setCancelledMessage() {
     elements.resultTitle.classList.remove("error-text");
     elements.resultText.value = "本次转写已取消，可重新点击「开始转写」继续。";
     hideTranscriptStats();
-    elements.exportBtn.disabled = true;
+    disableActionButtons();
 }
 
 async function cancelTranscription() {
@@ -375,9 +383,12 @@ elements.transcribeBtn.addEventListener("click", async () => {
     state.exportBaseName = baseName(elements.fileName.textContent.trim()) || "transcript";
     updateButton();
 
+    state.segments = [];
+    renderSegments([]);
+    disableActionButtons();
+
     elements.timeCost.textContent = "00:00";
     hideTranscriptStats();
-    elements.exportBtn.disabled = true;
     elements.resultCard.classList.remove("is-hidden");
     elements.resultText.value = "正在转写，长录音会分段处理，请稍候...";
     setSuccess();
@@ -448,6 +459,7 @@ elements.transcribeBtn.addEventListener("click", async () => {
         elements.timeCost.textContent =
             `耗时 ${elapsed}s / 推理 ${data.inference_time}s`;
         showTranscriptStats(data.char_count || 0);
+        elements.copyBtn.disabled = !hasText;
         elements.exportBtn.disabled = !hasText;
         elements.exportSrtBtn.disabled = !hasText || state.segments.length === 0;
         elements.exportVttBtn.disabled = !hasText || state.segments.length === 0;
@@ -470,7 +482,7 @@ elements.transcribeBtn.addEventListener("click", async () => {
 });
 
 elements.copyBtn.addEventListener("click", async () => {
-    if (!elements.resultText.value) return;
+    if (state.busy || elements.copyBtn.disabled || !elements.resultText.value) return;
     const oldText = elements.copyBtn.textContent;
     try {
         await navigator.clipboard.writeText(elements.resultText.value);
@@ -606,15 +618,19 @@ async function saveFile(content, filename, mimeType, description) {
 }
 
 elements.exportBtn.addEventListener("click", () => {
+    if (state.busy || elements.exportBtn.disabled) return;
     saveFile(elements.resultText.value, `${state.exportBaseName}.txt`, "text/plain", "文本文件");
 });
 
 elements.exportSrtBtn.addEventListener("click", () => {
+    if (state.busy || elements.exportSrtBtn.disabled || !state.segments.length) return;
     saveFile(generateSrt(state.segments), `${state.exportBaseName}.srt`, "text/plain", "SRT 字幕");
 });
 
 elements.exportVttBtn.addEventListener("click", () => {
+    if (state.busy || elements.exportVttBtn.disabled || !state.segments.length) return;
     saveFile(generateVtt(state.segments), `${state.exportBaseName}.vtt`, "text/vtt", "VTT 字幕");
 });
 
+disableActionButtons();
 loadModels();
