@@ -401,8 +401,19 @@ elements.transcribeBtn.addEventListener("click", async () => {
             if (!res.ok) return;
             const data = await res.json();
             if (!data.active) return;
-            elements.progressTag.textContent =
-                data.total > 0 ? `分段 ${data.done}/${data.total}` : "分段检测中...";
+            if (data.stage === "queued") {
+                elements.progressTag.textContent = "排队等待中...";
+            } else if (data.stage === "converting") {
+                elements.progressTag.textContent = "音频转码中...";
+            } else if (data.stage === "segmenting") {
+                elements.progressTag.textContent = "语音分段中...";
+            } else if (data.stage === "transcribing") {
+                elements.progressTag.textContent =
+                    data.total > 0 ? `分段识别 ${data.done}/${data.total}` : "正在识别...";
+            } else {
+                elements.progressTag.textContent =
+                    data.total > 0 ? `分段 ${data.done}/${data.total}` : "处理中...";
+            }
         } catch {
             // 轮询失败静默，转写主请求会报告真实结果。
         }

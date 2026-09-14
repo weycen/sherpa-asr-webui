@@ -68,5 +68,24 @@ class TestServerAPI(unittest.TestCase):
             server.upload_store.delete(meta["id"])
 
 
+    def test_transcribe_progress_stage(self):
+        # When no job active
+        res = server.transcribe_progress("nonexistent_id")
+        self.assertFalse(res["active"])
+        self.assertEqual(res["stage"], "idle")
+
+        # When mock job active
+        mock_job = {"cancel_event": None, "stage": "converting", "done": 1, "total": 5}
+        server._set_job("mock_id", mock_job)
+        try:
+            res = server.transcribe_progress("mock_id")
+            self.assertTrue(res["active"])
+            self.assertEqual(res["stage"], "converting")
+            self.assertEqual(res["done"], 1)
+            self.assertEqual(res["total"], 5)
+        finally:
+            server._drop_job("mock_id")
+
+
 if __name__ == "__main__":
     unittest.main()

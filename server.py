@@ -191,14 +191,21 @@ def transcribe_audio(
         os.path.dirname(source_path), f"converted.{uuid.uuid4().hex}.16k.wav"
     )
 
-    job = {"cancel_event": threading.Event(), "done": 0, "total": 0}
+    job = {"cancel_event": threading.Event(), "stage": "queued", "done": 0, "total": 0}
     _set_job(upload_id, job)
     upload_store.activate(upload_id)
+
+    def set_stage(stage: str):
+        with _job_lock:
+            current = _jobs.get(upload_id)
+            if current is job:
+                current["stage"] = stage
 
     def on_progress(done: int, total: int):
         with _job_lock:
             current = _jobs.get(upload_id)
             if current is job:
+                current["stage"] = "transcribing"
                 current["done"] = done
                 current["total"] = total
 
@@ -210,6 +217,7 @@ def transcribe_audio(
         with concurrency_gate:
             if cancel_event.is_set():
                 raise TranscriptionCancelled()
+            set_stage("converting")
             convert_to_16k_mono_wav(
                 source_path, wav_path, should_cancel=cancel_event.is_set
             )
@@ -223,6 +231,7 @@ def transcribe_audio(
                         detail=f"音频时长 {seconds:.0f} 秒，超过限制 {int(MAX_AUDIO_SECONDS)} 秒",
                     )
 
+            set_stage("segmenting")
             result = transcribe_audio_file(
                 runtime,
                 punct,
@@ -277,9 +286,10 @@ def cancel_transcribe(upload_id: str = Form(...)):
 def transcribe_progress(upload_id: str = Query(...)):
     job = _get_job(upload_id)
     if job is None:
-        return {"active": False, "done": 0, "total": 0}
+        return {"active": False, "stage": "idle", "done": 0, "total": 0}
     return {
         "active": True,
+        "stage": job.get("stage", "transcribing"),
         "done": job["done"],
         "total": job["total"],
     }
