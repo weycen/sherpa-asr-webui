@@ -46,24 +46,29 @@ sudo apt install ffmpeg
 
 识别模型全部在 `config/models.json` 的 `models` 列表里声明。服务启动不再强依赖某个固定模型目录，
 而是在第一次转写时才加载并常驻内存（懒加载 + 缓存）。文件路径相对 `config/models.json` 所在
-目录解析（示例中模型与仓库目录平级，故为 `../../`），也支持绝对路径。要新增模型时复制一个条目
-改字段即可，Web 界面会自动多出一个可选项。
+目录解析（如 `../models/...`），也支持绝对路径。要新增模型时复制一个条目改字段即可，
+Web 界面会自动多出一个可选项。
 
 ```json
 {
   "default_model": "sense-voice-zh-en-ja-ko-yue-int8",
-  "punctuation": {
-    "ct_transformer": "../../sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8/model.int8.onnx",
-    "num_threads": 2
-  },
   "vad": {
-    "model": "../../silero_vad.onnx",
+    "model": "../models/vad/silero_vad.onnx",
     "sample_rate": 16000,
     "threshold": 0.5,
     "min_speech_duration": 0.25,
     "min_silence_duration": 0.5,
     "max_speech_duration": 25.0
   },
+  "default_punctuation": "punct-ct-transformer-zh-en",
+  "punctuations": [
+    {
+      "id": "punct-ct-transformer-zh-en",
+      "label": "中文标点 (CT-Transformer)",
+      "ct_transformer": "../models/punctuation/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8/model.int8.onnx",
+      "num_threads": 2
+    }
+  ],
   "models": [
     {
       "id": "sense-voice-zh-en-ja-ko-yue-int8",
@@ -71,8 +76,8 @@ sudo apt install ffmpeg
       "description": "SenseVoice-Small 多语种识别，支持自动标点与数字/单位规范化。",
       "type": "sense_voice",
       "config": {
-        "model": "../../sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/model.int8.onnx",
-        "tokens": "../../sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/tokens.txt",
+        "model": "../models/asr/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/model.int8.onnx",
+        "tokens": "../models/asr/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/tokens.txt",
         "num_threads": 4,
         "use_itn": true
       }
@@ -87,19 +92,14 @@ sudo apt install ffmpeg
 - `label` / `description`：下拉框与状态展示用，仅前端文案。
 - `type`：指定加载器，当前支持 `sense_voice`、`paraformer`、`whisper`、`transducer`。
 - `config`：原样作为对应加载函数的关键字参数（如 `from_sense_voice`），路径类参数自动解析。
-- `punctuation`：可选，sherpa-onnx 标点恢复模型（CT-Transformer，中/英）。
+- `punctuations` / `default_punctuation`：可选，sherpa-onnx 标点恢复模型列表及默认启用项。
 - `vad`：可选，silero VAD 长音频分段模型；缺失时按固定 25 秒窗口兜底。
 
 ## 长音频处理
 
 音频会先经 silero VAD 切成一个个语音段（单段上限默认 25 秒），逐段独立解码后再合并，因此
 上传 20 分钟以上的长录音也不会一次性把所有音频灌进模型导致内存耗尽。合并时按静音停顿和篇幅
-切成适合阅读的段落，用空行分隔输出。VAD 模型下载：
-
-```bash
-cd /home/weycen/asr-service
-wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
-```
+切成适合阅读的段落，用空行分隔输出。
 
 上传与转写是两步接口：前端先 `POST /api/upload`（带进度）拿 `upload_id`，再
 `POST /api/transcribe` 提交 `upload_id` 转写。上传文件暂存在临时目录，自动过期清理。
@@ -109,21 +109,10 @@ wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_v
 
 SenseVoice 这类离线模型输出的中文/粤语通常没有断句标点，英文则固定全大写。本服务做了两层后处理：
 
-- 英文大小写归一化：检测到整段英文全大写时，自动转为句子大小写（首字母大写、其余小写）。
-- 标点恢复：若 `models.json` 配置了 `punctuation` 字段，会用 sherpa-onnx 官方的
-  CT-Transformer 标点模型（中/英）为转写文本补上 `，。！？` 等标点。Web 界面上有一个
-  “添加标点（中/英）”开关，默认开启，处理纯日语/韩语等不需要中文标点的音频时可关闭。
+- 英文大小写归一化：检测到整段以英文为主且全大写时，自动转为句子大小写（首字母大写、其余小写，保留中文中的专有名词缩写）。
+- 标点恢复：若 `models.json` 配置了 `punctuations` 字段，会用 CT-Transformer 标点模型为转写文本补上标点。Web 界面提供标点模型下拉选择器（可选具体标点模型或关闭），处理纯日语/韩语等不需要中文标点的音频时可关闭。
 
-标点模型约 75 MB，可下载到与 SenseVoice 同级的模型目录：
-
-```bash
-cd /home/weycen/asr-service
-curl -SL -O https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2
-tar xjf sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2
-```
-
-标点模型缺失或加载失败时服务不会报错，只跳过标点这一步，其余功能照常。如果某个模型不希望走
-标点恢复，将 `punctuation` 字段从 `models.json` 删掉即可。
+标点模型缺失或加载失败时服务不会报错，只跳过标点这一步，其余功能照常。
 
 ## 并发与接口
 
@@ -146,8 +135,8 @@ tar xjf sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.b
 
 ## API
 
-- `GET /api/models`：模型列表，含 `default_model`、`punctuation_available` 和模型明细。
+- `GET /api/models`：模型列表，含 `default_model`、`models` 清单、`default_punctuation` 与 `punctuations` 清单。
 - `POST /api/upload`：上传音频（multipart `file`），返回 `upload_id/filename/size/duration`。
 - `POST /api/transcribe`：转写已上传文件（multipart `upload_id` + 可选 `model`、
-  `use_punctuation`）。成功返回 `{"status", "model", "text", "paragraphs", "segments",
+  `punctuation_model`）。成功返回 `{"status", "model", "text", "paragraphs", "segments",
   "inference_time", "audio_seconds"}`；`text` 按空行分段落。
