@@ -52,21 +52,36 @@
                 </div>
             </div>
 
+            <div class="audio-player-wrap is-hidden" id="audioPlayerWrap">
+                <audio id="audioPlayer" class="audio-player" controls preload="metadata"></audio>
+            </div>
+
             <button id="transcribeBtn" class="primary-btn" disabled>开始转写</button>
         </section>
 
         <section class="card is-hidden" id="resultCard" aria-label="识别结果">
             <div class="result-header">
-                <span class="result-title">识别结果</span>
+                <div class="result-title-wrap">
+                    <span class="result-title">识别结果</span>
+                    <div class="view-toggle" id="viewToggle">
+                        <button type="button" class="toggle-btn active" id="textViewBtn">全文</button>
+                        <button type="button" class="toggle-btn" id="segmentsViewBtn">时间轴</button>
+                    </div>
+                </div>
                 <div class="result-meta">
                     <span class="tag is-hidden" id="progressTag" aria-live="polite"></span>
                     <span class="tag" id="timeCost"></span>
                     <span class="tag is-hidden" id="statTag"></span>
                     <button class="copy-btn" id="copyBtn" type="button">复制文本</button>
-                    <button class="export-btn" id="exportBtn" type="button" disabled>导出文件</button>
+                    <div class="export-dropdown">
+                        <button class="export-btn" id="exportBtn" type="button" disabled>导出 TXT</button>
+                        <button class="export-btn-sub" id="exportSrtBtn" type="button" disabled>导出 SRT</button>
+                        <button class="export-btn-sub" id="exportVttBtn" type="button" disabled>导出 VTT</button>
+                    </div>
                 </div>
             </div>
             <textarea class="result-box" id="resultText" readonly placeholder="等待处理..."></textarea>
+            <div class="segments-box is-hidden" id="segmentsBox"></div>
         </section>
     </main>
 

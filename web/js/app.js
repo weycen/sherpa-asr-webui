@@ -8,6 +8,8 @@ const elements = {
     fileState: document.getElementById("fileState"),
     uploadProgressBar: document.getElementById("uploadProgressBar"),
     uploadProgressText: document.getElementById("uploadProgressText"),
+    audioPlayerWrap: document.getElementById("audioPlayerWrap"),
+    audioPlayer: document.getElementById("audioPlayer"),
     transcribeBtn: document.getElementById("transcribeBtn"),
     modelSelect: document.getElementById("modelSelect"),
     modelStatus: document.getElementById("modelStatus"),
@@ -15,11 +17,16 @@ const elements = {
     resultCard: document.getElementById("resultCard"),
     resultText: document.getElementById("resultText"),
     resultTitle: document.querySelector(".result-title"),
+    textViewBtn: document.getElementById("textViewBtn"),
+    segmentsViewBtn: document.getElementById("segmentsViewBtn"),
+    segmentsBox: document.getElementById("segmentsBox"),
     timeCost: document.getElementById("timeCost"),
     progressTag: document.getElementById("progressTag"),
     statTag: document.getElementById("statTag"),
     copyBtn: document.getElementById("copyBtn"),
     exportBtn: document.getElementById("exportBtn"),
+    exportSrtBtn: document.getElementById("exportSrtBtn"),
+    exportVttBtn: document.getElementById("exportVttBtn"),
     toast: document.getElementById("toast"),
 };
 
@@ -43,6 +50,8 @@ const state = {
     progressTimer: null,
     exportBaseName: "transcript",
     toastTimer: null,
+    segments: [],
+    activeView: "text",
 };
 
 function formatSize(bytes) {
@@ -198,11 +207,18 @@ async function loadModels() {
 function resetFileInfo(file) {
     state.uploadId = null;
     state.uploadDuration = null;
+    state.segments = [];
+    elements.audioPlayer.pause();
+    elements.audioPlayer.removeAttribute("src");
+    elements.audioPlayer.load();
+    elements.audioPlayerWrap.classList.add("is-hidden");
     elements.fileName.textContent = file.name;
     elements.fileMeta.textContent = ""; // 上传完成前不显示大小
     elements.fileState.style.display = "none";
     elements.fileUploadRow.classList.remove("is-hidden");
     setUploadProgress(0, "", false);
+    renderSegments([]);
+    switchView("text");
 }
 
 function fileExtension(name) {
@@ -270,6 +286,8 @@ function uploadFile(file) {
             setUploadDone(true);
             const dur = formatDuration(data.duration);
             elements.fileMeta.textContent = `${formatSize(data.size)}${dur ? " · " + dur : ""}`;
+            elements.audioPlayer.src = `/api/audio/${data.upload_id}`;
+            elements.audioPlayerWrap.classList.remove("is-hidden");
         }
         updateButton();
     };
@@ -414,10 +432,14 @@ elements.transcribeBtn.addEventListener("click", async () => {
         setSuccess();
         const hasText = !!(data.text && data.text.trim());
         elements.resultText.value = data.text || "(未识别到有效语音内容)";
+        state.segments = data.segments || [];
+        renderSegments(state.segments);
         elements.timeCost.textContent =
             `耗时 ${elapsed}s / 推理 ${data.inference_time}s`;
         showTranscriptStats(data.char_count || 0);
         elements.exportBtn.disabled = !hasText;
+        elements.exportSrtBtn.disabled = !hasText || state.segments.length === 0;
+        elements.exportVttBtn.disabled = !hasText || state.segments.length === 0;
     } catch (err) {
         if (state.cancelRequested || err.name === "AbortError") {
             setCancelledMessage();
@@ -452,27 +474,113 @@ elements.copyBtn.addEventListener("click", async () => {
     }, 1500);
 });
 
-async function exportTranscript() {
-    const text = elements.resultText.value;
-    if (!text.trim()) return;
+function formatSrtTime(seconds) {
+    const totalMs = Math.round(seconds * 1000);
+    const ms = totalMs % 1000;
+    const totalS = Math.floor(totalMs / 1000);
+    const s = totalS % 60;
+    const m = Math.floor(totalS / 60) % 60;
+    const h = Math.floor(totalS / 3600);
+    const pad = (n, len = 2) => String(n).padStart(len, "0");
+    return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms, 3)}`;
+}
 
-    const filename = `${state.exportBaseName}.txt`;
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+function formatVttTime(seconds) {
+    const totalMs = Math.round(seconds * 1000);
+    const ms = totalMs % 1000;
+    const totalS = Math.floor(totalMs / 1000);
+    const s = totalS % 60;
+    const m = Math.floor(totalS / 60) % 60;
+    const h = Math.floor(totalS / 3600);
+    const pad = (n, len = 2) => String(n).padStart(len, "0");
+    return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(ms, 3)}`;
+}
 
-    // 支持时用系统「另存为」对话框，让用户选位置、改文件名。
+function generateSrt(segments) {
+    return segments.map((seg, idx) => {
+        return `${idx + 1}\n${formatSrtTime(seg.start)} --> ${formatSrtTime(seg.end)}\n${seg.text}\n`;
+    }).join("\n");
+}
+
+function generateVtt(segments) {
+    const lines = ["WEBVTT\n"];
+    segments.forEach((seg, idx) => {
+        lines.push(`${idx + 1}\n${formatVttTime(seg.start)} --> ${formatVttTime(seg.end)}\n${seg.text}\n`);
+    });
+    return lines.join("\n");
+}
+
+function renderSegments(segments) {
+    elements.segmentsBox.replaceChildren();
+    if (!segments || segments.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "status-text";
+        empty.style.textAlign = "center";
+        empty.style.padding = "24px 0";
+        empty.textContent = "(无时间戳分段信息)";
+        elements.segmentsBox.appendChild(empty);
+        return;
+    }
+    for (const seg of segments) {
+        const row = document.createElement("div");
+        row.className = "segment-row";
+
+        const badge = document.createElement("span");
+        badge.className = "segment-time-badge";
+        badge.textContent = `${formatDuration(seg.start)} ▶`;
+        badge.title = "点击跳转播放";
+        badge.addEventListener("click", () => {
+            if (elements.audioPlayer.src) {
+                elements.audioPlayer.currentTime = seg.start;
+                elements.audioPlayer.play();
+            }
+        });
+
+        const textSpan = document.createElement("span");
+        textSpan.className = "segment-text";
+        textSpan.textContent = seg.text;
+
+        row.appendChild(badge);
+        row.appendChild(textSpan);
+        elements.segmentsBox.appendChild(row);
+    }
+}
+
+function switchView(view) {
+    state.activeView = view;
+    if (view === "segments") {
+        elements.textViewBtn.classList.remove("active");
+        elements.segmentsViewBtn.classList.add("active");
+        elements.resultText.classList.add("is-hidden");
+        elements.segmentsBox.classList.remove("is-hidden");
+    } else {
+        elements.segmentsViewBtn.classList.remove("active");
+        elements.textViewBtn.classList.add("active");
+        elements.segmentsBox.classList.add("is-hidden");
+        elements.resultText.classList.remove("is-hidden");
+    }
+}
+
+elements.textViewBtn.addEventListener("click", () => switchView("text"));
+elements.segmentsViewBtn.addEventListener("click", () => switchView("segments"));
+
+async function saveFile(content, filename, mimeType, description) {
+    if (!content.trim()) return;
+    const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+
     if (window.showSaveFilePicker) {
         try {
+            const ext = filename.slice(filename.lastIndexOf("."));
             const handle = await window.showSaveFilePicker({
                 suggestedName: filename,
-                types: [{ description: "文本文件", accept: { "text/plain": [".txt"] } }],
+                types: [{ description: description, accept: { [mimeType]: [ext] } }],
             });
             const writable = await handle.createWritable();
             await writable.write(blob);
             await writable.close();
             return;
         } catch (err) {
-            if (err && err.name === "AbortError") return; // 用户取消
-            // 其它异常退回普通下载，保证仍能导出。
+            if (err && err.name === "AbortError") return;
         }
     }
 
@@ -486,6 +594,16 @@ async function exportTranscript() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-elements.exportBtn.addEventListener("click", exportTranscript);
+elements.exportBtn.addEventListener("click", () => {
+    saveFile(elements.resultText.value, `${state.exportBaseName}.txt`, "text/plain", "文本文件");
+});
+
+elements.exportSrtBtn.addEventListener("click", () => {
+    saveFile(generateSrt(state.segments), `${state.exportBaseName}.srt`, "text/plain", "SRT 字幕");
+});
+
+elements.exportVttBtn.addEventListener("click", () => {
+    saveFile(generateVtt(state.segments), `${state.exportBaseName}.vtt`, "text/vtt", "VTT 字幕");
+});
 
 loadModels();

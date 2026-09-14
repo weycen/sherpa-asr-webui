@@ -114,7 +114,7 @@ def _group_paragraphs(entries, pause_break, max_seconds, max_chars):
             current = []
             cur_seconds = 0.0
             cur_chars = 0
-        current.append(text)
+        current.append((start, duration, text))
         cur_seconds += duration
         cur_chars += len(text)
         prev_end = start + duration
@@ -233,11 +233,12 @@ def transcribe_audio_file(
     )
 
     out_texts = []
+    out_segments = []
     for group in paragraphs:
         if should_cancel():
             raise TranscriptionCancelled()
         raw = ""
-        for text in group:
+        for start, duration, text in group:
             raw = _join_segments(raw, text)
         all_caps = looks_all_caps(raw)
         if all_caps:
@@ -246,13 +247,25 @@ def transcribe_audio_file(
             raw = punctuator.add(raw)
             if all_caps:
                 raw = normalize_english_case(ascii_punctuation_for_english(raw))
-        out_texts.append(raw.strip())
+        clean = raw.strip()
+        if clean:
+            out_texts.append(clean)
+            start_sec = round(group[0][0], 2)
+            end_sec = round(group[-1][0] + group[-1][1], 2)
+            out_segments.append(
+                {
+                    "start": start_sec,
+                    "end": max(end_sec, round(start_sec + 0.1, 2)),
+                    "text": clean,
+                }
+            )
 
     return {
         "text": "\n\n".join(t for t in out_texts if t),
         "paragraphs": len(out_texts),
         "inference_time": round(inference, 3),
         "segments": len(entries),
+        "segment_items": out_segments,
         "audio_seconds": round(total_seconds, 1),
         "chunks": chunk_debug,
     }

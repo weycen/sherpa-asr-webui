@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import DEFAULT_MODELS_FILE, ROOT_DIR, load_models
@@ -148,6 +149,21 @@ def upload_audio(request: Request, file: UploadFile = File(...)):
     }
 
 
+@app.get("/api/audio/{upload_id}")
+def get_audio(upload_id: str):
+    meta = upload_store.get(upload_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="音频不存在或已过期")
+    path = meta.get("path")
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="音频源文件不存在")
+    return FileResponse(
+        path=path,
+        filename=meta.get("filename", "audio"),
+        media_type="audio/*",
+    )
+
+
 @app.post("/api/transcribe")
 def transcribe_audio(
     upload_id: str = Form(...),
@@ -222,7 +238,8 @@ def transcribe_audio(
             "model": runtime.spec.id,
             "text": result["text"],
             "paragraphs": result["paragraphs"],
-            "segments": result["segments"],
+            "segments": result.get("segment_items", []),
+            "segment_count": result.get("segments", 0),
             "char_count": stats["char_count"],
             "inference_time": result["inference_time"],
             "audio_seconds": result["audio_seconds"],

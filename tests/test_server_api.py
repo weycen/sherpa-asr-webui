@@ -53,6 +53,20 @@ class TestServerAPI(unittest.TestCase):
             server.MAX_AUDIO_SECONDS = orig_limit
             server.upload_store.delete(meta["id"])
 
+    def test_get_audio(self):
+        meta = server.upload_store.save(io.BytesIO(b"RIFF dummy wav"), 1024 * 1024, "mock.wav")
+        try:
+            res = server.get_audio(meta["id"])
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.path, meta["path"])
+
+            # Test nonexistent id
+            with self.assertRaises(HTTPException) as ctx:
+                server.get_audio("b" * 32)
+            self.assertEqual(ctx.exception.status_code, 404)
+        finally:
+            server.upload_store.delete(meta["id"])
+
 
 if __name__ == "__main__":
     unittest.main()
