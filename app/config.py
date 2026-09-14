@@ -72,7 +72,7 @@ def _resolve_paths(base_dir: Path, config: dict) -> dict:
 
 def load_models(
     models_file: str | os.PathLike | None = None,
-) -> tuple[str, list[ModelSpec], PunctuationSpec | None, VadSpec | None]:
+) -> tuple[str, list[ModelSpec], list[PunctuationSpec], str | None, VadSpec | None]:
     """Return (default_model_id, specs, punct_specs, default_punct_id, vad_spec)."""
     path = Path(models_file or os.getenv("ASR_MODELS_FILE") or DEFAULT_MODELS_FILE)
     if not path.is_file():
