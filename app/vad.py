@@ -13,17 +13,17 @@ from .config import VadSpec
 class Segmenter:
     """Lazy-loaded silero VAD. Falls back to fixed windows when the model is absent."""
 
-    def __init__(self, spec: VadSpec):
+    def __init__(self, spec: VadSpec | None = None):
         self._spec = spec
         self._vad = None
         self._warned = False
 
     def available(self) -> bool:
-        return os.path.isfile(self._spec.model)
+        return bool(self._spec and self._spec.model and os.path.isfile(self._spec.model))
 
     def _load(self):
         if not self.available():
-            if not self._warned:
+            if not self._warned and self._spec is not None:
                 print(
                     f"[警告] VAD 模型不存在: {self._spec.model}；改用固定长度分段。",
                     file=sys.stderr,
@@ -46,7 +46,8 @@ class Segmenter:
         vad = self._load()
         if vad is None:
             # Fallback: fixed windows, keeps long files usable without the VAD model.
-            window = max(int(self._spec.max_speech_duration * sample_rate), sample_rate)
+            max_duration = self._spec.max_speech_duration if self._spec else 25.0
+            window = max(int(max_duration * sample_rate), sample_rate)
             return [(i, min(i + window, len(samples))) for i in range(0, len(samples), window)]
 
         step = int(0.5 * sample_rate)

@@ -57,7 +57,7 @@ except Exception as exc:
 
 manager = ModelManager(MODEL_SPECS, DEFAULT_MODEL_ID)
 punctuation_manager = PunctuationManager(PUNCT_SPECS, DEFAULT_PUNCT_ID) if PUNCT_SPECS else None
-segmenter = Segmenter(VAD_SPEC) if VAD_SPEC else None
+segmenter = Segmenter(VAD_SPEC)
 upload_store = UploadStore(UPLOAD_ROOT)
 concurrency_gate = threading.BoundedSemaphore(MAX_CONCURRENT)
 
