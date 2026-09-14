@@ -58,16 +58,33 @@ def _is_cjk(ch: str) -> bool:
     )
 
 
-def _strip_boundary_repeat(prev: str, cur: str, max_chars: int = 4) -> str:
-    """Drop a CJK suffix/prefix repeat introduced by an overlapping cut.
+def _strip_boundary_repeat(prev: str, cur: str, max_chars: int = 12) -> str:
+    """Drop a suffix/prefix repeat introduced by an overlapping cut.
 
-    Only used when two chunks actually overlap in audio, so natural (non
-    overlapping) boundaries are never altered.
+    Only used when two chunks actually overlap in audio (forced_overlap),
+    so natural (non-overlapping) boundaries are never altered.
+    Supports both CJK characters and Latin words.
     """
+    if not prev or not cur:
+        return cur
+
+    # 1. Latin word overlap check (e.g. "to the market" repeated)
+    prev_words = prev.strip().split()
+    cur_words = cur.strip().split()
+    if prev_words and cur_words and (prev_words[-1].isascii() or cur_words[0].isascii()):
+        max_w = min(len(prev_words), len(cur_words), 8)
+        for k in range(max_w, 0, -1):
+            if [w.lower() for w in prev_words[-k:]] == [w.lower() for w in cur_words[:k]]:
+                matched_prefix = " ".join(cur_words[:k])
+                idx = cur.lower().find(matched_prefix.lower())
+                if idx >= 0:
+                    return cur[idx + len(matched_prefix):].lstrip()
+
+    # 2. CJK character overlap check
     limit = min(max_chars, len(prev), len(cur))
     for k in range(limit, 0, -1):
         seg = prev[-k:]
-        if seg == cur[:k] and all(_is_cjk(c) for c in seg):
+        if seg == cur[:k] and any(_is_cjk(c) for c in seg):
             return cur[k:]
     return cur
 
@@ -77,7 +94,7 @@ def _join_segments(a: str, b: str) -> str:
         return b
     if not b:
         return a
-    if a[-1].isascii() and a[-1].isalnum() and b[0].isascii() and b[0].isalnum():
+    if (a[-1].isascii() and (a[-1].isalnum() or a[-1] in ",.!?:;")) and b[0].isascii() and b[0].isalnum():
         return f"{a} {b}"
     return a + b
 
@@ -167,7 +184,10 @@ def transcribe_audio_file(
             inference += time.time() - t0
             kept, raw_text = _chunk_tokens(stream.result, chunk, sample_rate, last_gt)
             if kept is None:
-                text = _strip_boundary_repeat(acc_text, raw_text)
+                if chunk.boundary_before == "forced_overlap":
+                    text = _strip_boundary_repeat(acc_text, raw_text)
+                else:
+                    text = raw_text
             else:
                 # Drop a leading token only if it repeats the previous chunk's
                 # last token from the very same moment (a split word), not when
