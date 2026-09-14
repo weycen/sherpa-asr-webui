@@ -129,6 +129,7 @@ SenseVoice 这类离线模型输出的中文/粤语通常没有断句标点，�
 | `ASR_PORT` | `8000` | 监听端口 |
 | `ASR_MODELS_FILE` | `config/models.json` | 模型配置文件路径 |
 | `ASR_MAX_UPLOAD_MB` | `512` | 单次上传大小上限（MB） |
+| `ASR_MAX_STORAGE_GB` | `5.0` | 上传目录总容量配额上限（GB），超额按 LRU 淘汰旧文件 |
 | `ASR_MAX_AUDIO_SECONDS` | `0` | 音频时长上限（秒），`0` 表示不限 |
 | `ASR_MAX_CONCURRENT` | `2` | 同时进行的转写任务数上限 |
 | `ASR_UPLOAD_DIR` | 系统临时目录 | 上传文件存放目录 |

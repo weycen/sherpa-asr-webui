@@ -1,10 +1,12 @@
 """FastAPI 入口：上传接口 + 长音频分段转写 + 托管 web/ 前端。"""
 
+import asyncio
 import os
 import sys
 import tempfile
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -42,6 +44,7 @@ def _env_float(name: str, default: float) -> float:
 HOST = os.getenv("ASR_HOST", "0.0.0.0")
 PORT = int(os.getenv("ASR_PORT", "8000"))
 MAX_UPLOAD_BYTES = int(_env_float("ASR_MAX_UPLOAD_MB", 512) * 1024 * 1024)
+MAX_STORAGE_BYTES = int(_env_float("ASR_MAX_STORAGE_GB", 5.0) * 1024 * 1024 * 1024)
 MAX_AUDIO_SECONDS = _env_float("ASR_MAX_AUDIO_SECONDS", 0) or None
 MAX_CONCURRENT = max(1, int(os.getenv("ASR_MAX_CONCURRENT", "2")))
 MODELS_FILE = os.getenv("ASR_MODELS_FILE") or str(DEFAULT_MODELS_FILE)
@@ -59,14 +62,46 @@ except Exception as exc:
 manager = ModelManager(MODEL_SPECS, DEFAULT_MODEL_ID)
 punctuation_manager = PunctuationManager(PUNCT_SPECS, DEFAULT_PUNCT_ID) if PUNCT_SPECS else None
 segmenter = Segmenter(VAD_SPEC)
-upload_store = UploadStore(UPLOAD_ROOT)
+upload_store = UploadStore(UPLOAD_ROOT, max_total_bytes=MAX_STORAGE_BYTES)
 concurrency_gate = threading.BoundedSemaphore(MAX_CONCURRENT)
 
 # 进行中的转写任务：upload_id -> {"cancel_event", "done", "total"}。
 _job_lock = threading.Lock()
 _jobs: dict[str, dict] = {}
 
-app = FastAPI(title="Sherpa ASR WebUI")
+
+async def _periodic_prune(interval_seconds: int = 900):
+    """后台每隔 interval_seconds (默认15分钟) 执行一次过期文件与超额配额清理。"""
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            upload_store.prune()
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            print(f"[警告] 定期清理上传文件失败: {exc}", file=sys.stderr)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动阶段：清理上次异常退出的中间 WAV 文件并执行初始淘汰
+    swept = upload_store.cleanup_orphan_wavs()
+    if swept:
+        print(f"已清理上次异常退出残留的中间文件: {swept} 个")
+    upload_store.prune()
+
+    cleanup_task = asyncio.create_task(_periodic_prune(interval_seconds=900))
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="Sherpa ASR WebUI", lifespan=lifespan)
 
 
 def _get_job(upload_id: str) -> dict | None:
@@ -157,6 +192,7 @@ def get_audio(upload_id: str):
     path = meta.get("path")
     if not path or not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="音频源文件不存在")
+    upload_store.touch(upload_id)
     return FileResponse(
         path=path,
         filename=meta.get("filename", "audio"),
@@ -174,6 +210,8 @@ def transcribe_audio(
     meta = upload_store.get(upload_id)
     if meta is None:
         raise HTTPException(status_code=404, detail="上传不存在或已过期，请重新上传")
+
+    upload_store.touch(upload_id)
 
     # 转码前先行校验时长限制，避免超长文件无效转码浪费资源
     if MAX_AUDIO_SECONDS and meta.get("duration"):
@@ -308,8 +346,6 @@ if __name__ == "__main__":
     print(f"模型配置文件: {MODELS_FILE}")
     print(f"默认模型: {manager.default_model_id}")
     print(f"上传大小上限: {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+    print(f"存储空间配额: {MAX_STORAGE_BYTES // (1024 * 1024 * 1024)} GB")
     print(f"并发转写上限: {MAX_CONCURRENT}")
-    swept = upload_store.cleanup_orphan_wavs()
-    if swept:
-        print(f"已清理上次异常退出残留的中间文件: {swept} 个")
     uvicorn.run(app, host=HOST, port=PORT)

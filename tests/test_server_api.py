@@ -87,5 +87,32 @@ class TestServerAPI(unittest.TestCase):
             server._drop_job("mock_id")
 
 
+    def test_lifespan(self):
+        import asyncio
+
+        async def run_lifespan():
+            async with server.lifespan(server.app):
+                pass
+
+        asyncio.run(run_lifespan())
+
+    def test_get_audio_touches_mtime(self):
+        import os
+        import time
+
+        meta = server.upload_store.save(io.BytesIO(b"RIFF dummy wav"), 1024 * 1024, "mock.wav")
+        try:
+            up_dir = server.upload_store.root / meta["id"]
+            past = time.time() - 500
+            os.utime(up_dir, (past, past))
+            self.assertAlmostEqual(os.path.getmtime(up_dir), past, delta=2)
+
+            res = server.get_audio(meta["id"])
+            self.assertEqual(res.status_code, 200)
+            self.assertGreater(os.path.getmtime(up_dir), past + 400)
+        finally:
+            server.upload_store.delete(meta["id"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,11 +40,13 @@ class UploadStore:
         root: str | Path | None = None,
         ttl_seconds: int = 2 * 3600,
         max_items: int = 200,
+        max_total_bytes: int = 5 * 1024 * 1024 * 1024,
     ):
         self.root = Path(root or Path(tempfile.gettempdir()) / "sherpa_asr_uploads")
         self.root.mkdir(parents=True, exist_ok=True)
         self.ttl_seconds = ttl_seconds
         self.max_items = max_items
+        self.max_total_bytes = max_total_bytes
         self._lock = threading.Lock()
         self._active: collections.Counter = collections.Counter()
 
@@ -93,6 +95,7 @@ class UploadStore:
 
         raw_path = dst_dir / f"source{ext}"
         size = 0
+        self.activate(upload_id)
         try:
             with open(raw_path, "wb") as out:
                 while True:
@@ -103,21 +106,24 @@ class UploadStore:
                     if size > max_bytes:
                         raise UploadTooLarge(max_bytes)
                     out.write(chunk)
+
+            meta = {
+                "id": upload_id,
+                "filename": filename,
+                "path": str(raw_path),
+                "size": size,
+                "created": time.time(),
+                "duration": None,
+            }
+            (dst_dir / "meta.json").write_text(
+                json.dumps(meta, ensure_ascii=False), encoding="utf-8"
+            )
         except Exception:
             self.delete(upload_id)
             raise
+        finally:
+            self.deactivate(upload_id)
 
-        meta = {
-            "id": upload_id,
-            "filename": filename,
-            "path": str(raw_path),
-            "size": size,
-            "created": time.time(),
-            "duration": None,
-        }
-        (dst_dir / "meta.json").write_text(
-            json.dumps(meta, ensure_ascii=False), encoding="utf-8"
-        )
         self.prune()
         return meta
 
@@ -146,6 +152,22 @@ class UploadStore:
         meta["duration"] = duration
         meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
+    def touch(self, upload_id: str) -> None:
+        """Update mtime of upload dir and meta.json to refresh TTL upon playback or transcription."""
+        if not is_valid_upload_id(upload_id):
+            return
+        dst_dir = self._dir(upload_id)
+        meta_path = dst_dir / "meta.json"
+        now = time.time()
+        try:
+            os.utime(dst_dir, (now, now))
+        except OSError:
+            pass
+        try:
+            os.utime(meta_path, (now, now))
+        except OSError:
+            pass
+
     def delete(self, upload_id: str):
         """Delete one upload dir. Caller must hold self._lock when concurrency matters."""
         if not is_valid_upload_id(upload_id):
@@ -160,21 +182,48 @@ class UploadStore:
             active = {uid for uid, cnt in self._active.items() if cnt > 0}
             item_entries = []
             for p in self.root.iterdir():
-                if p.is_dir():
-                    try:
-                        meta_file = p / "meta.json"
-                        mtime = meta_file.stat().st_mtime if meta_file.is_file() else 0
-                    except OSError:
-                        mtime = 0
-                    item_entries.append((p, mtime))
+                if not p.is_dir():
+                    continue
+                try:
+                    dir_stat = p.stat()
+                    meta_file = p / "meta.json"
+                    if meta_file.is_file():
+                        mtime = meta_file.stat().st_mtime
+                    else:
+                        # 尚无 meta.json：若目录是最近 30 分钟内创建的，判定为写入中或刚创建，豁免清理
+                        if now - dir_stat.st_mtime < 1800:
+                            continue
+                        mtime = dir_stat.st_mtime
 
+                    # 统计该目录占用的实际磁盘大小
+                    dir_size = 0
+                    for f in p.iterdir():
+                        try:
+                            if f.is_file():
+                                dir_size += f.stat().st_size
+                        except OSError:
+                            pass
+                except OSError:
+                    continue
+
+                item_entries.append((p, mtime, dir_size))
+
+            # 按 mtime 由旧到新排序（最早访问的排在前面）
             item_entries.sort(key=lambda x: x[1])
             remaining = len(item_entries)
-            for path, mtime in item_entries:
+            total_bytes = sum(entry[2] for entry in item_entries)
+
+            for path, mtime, size in item_entries:
                 if path.name in active:
                     continue
-                if now - mtime > self.ttl_seconds or remaining > self.max_items:
+                should_delete = (
+                    (now - mtime > self.ttl_seconds)
+                    or (remaining > self.max_items)
+                    or (total_bytes > self.max_total_bytes)
+                )
+                if should_delete:
                     self.delete(path.name)
                     remaining -= 1
+                    total_bytes -= size
                 else:
                     self._clean_converted(path)
