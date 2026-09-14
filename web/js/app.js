@@ -120,6 +120,7 @@ function setError(message) {
     elements.resultText.value = message;
     hideTranscriptStats();
     disableActionButtons();
+    elements.resultCard.classList.remove("is-hidden");
 }
 
 function setSuccess() {
@@ -225,6 +226,15 @@ function resetFileInfo(file) {
     elements.fileState.style.display = "none";
     elements.fileUploadRow.classList.remove("is-hidden");
     setUploadProgress(0, "", false);
+
+    // 重置结果大框为“等待转写”就绪空态，彻底消除上一音频残留信息
+    setSuccess();
+    elements.resultText.value = "";
+    elements.resultText.placeholder = "新音频已就绪，点击「开始转写」开始识别...";
+    elements.timeCost.textContent = "";
+    hideTranscriptStats();
+    elements.progressTag.textContent = "";
+    elements.progressTag.classList.add("is-hidden");
     renderSegments([]);
     switchView("text");
     disableActionButtons();
@@ -355,6 +365,7 @@ function setCancelledMessage() {
     elements.resultText.value = "本次转写已取消，可重新点击「开始转写」继续。";
     hideTranscriptStats();
     disableActionButtons();
+    elements.resultCard.classList.remove("is-hidden");
 }
 
 async function cancelTranscription() {
