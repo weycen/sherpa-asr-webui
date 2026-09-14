@@ -7,7 +7,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 from app.config import DEFAULT_MODELS_FILE, ROOT_DIR, load_models
@@ -108,7 +108,18 @@ def list_models():
 
 
 @app.post("/api/upload")
-def upload_audio(file: UploadFile = File(...)):
+def upload_audio(request: Request, file: UploadFile = File(...)):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"文件超过大小限制 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+                )
+        except ValueError:
+            pass
+
     filename = file.filename or "audio"
     try:
         meta = upload_store.save(file.file, MAX_UPLOAD_BYTES, filename)
@@ -147,6 +158,14 @@ def transcribe_audio(
     meta = upload_store.get(upload_id)
     if meta is None:
         raise HTTPException(status_code=404, detail="上传不存在或已过期，请重新上传")
+
+    # 转码前先行校验时长限制，避免超长文件无效转码浪费资源
+    if MAX_AUDIO_SECONDS and meta.get("duration"):
+        if meta["duration"] > MAX_AUDIO_SECONDS:
+            raise HTTPException(
+                status_code=413,
+                detail=f"音频时长 {meta['duration']:.0f} 秒，超过限制 {int(MAX_AUDIO_SECONDS)} 秒",
+            )
 
     model_id = model or manager.default_model_id
     punct = _resolve_punctuator(use_punctuation, punctuation_model)
