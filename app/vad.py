@@ -2,6 +2,7 @@
 
 import os
 import sys
+import threading
 
 import numpy as np
 import sherpa_onnx
@@ -17,6 +18,7 @@ class Segmenter:
         self._spec = spec
         self._vad = None
         self._warned = False
+        self._lock = threading.Lock()
 
     def available(self) -> bool:
         return bool(self._spec and self._spec.model and os.path.isfile(self._spec.model))
@@ -30,6 +32,8 @@ class Segmenter:
                 )
                 self._warned = True
             return None
+        if self._vad is not None:
+            return self._vad
         config = sherpa_onnx.VadModelConfig()
         config.sample_rate = self._spec.sample_rate
         config.silero_vad.model = self._spec.model
@@ -43,27 +47,33 @@ class Segmenter:
     def detect(self, samples: np.ndarray, sample_rate: int) -> list[tuple[int, int]]:
         """Return (start_sample, end_sample) spans of detected speech only."""
         samples = np.ascontiguousarray(samples, dtype=np.float32)
-        vad = self._load()
-        if vad is None:
-            # Fallback: fixed windows, keeps long files usable without the VAD model.
-            max_duration = self._spec.max_speech_duration if self._spec else 25.0
-            window = max(int(max_duration * sample_rate), sample_rate)
-            return [(i, min(i + window, len(samples))) for i in range(0, len(samples), window)]
+        with self._lock:
+            vad = self._load()
+            if vad is None:
+                # Fallback: fixed windows, keeps long files usable without the VAD model.
+                max_duration = self._spec.max_speech_duration if self._spec else 25.0
+                window = max(int(max_duration * sample_rate), sample_rate)
+                return [(i, min(i + window, len(samples))) for i in range(0, len(samples), window)]
 
-        step = int(0.5 * sample_rate)
-        for i in range(0, len(samples), step):
-            vad.accept_waveform(samples[i : i + step])
-        vad.flush()
+            while not vad.empty():
+                vad.pop()
+            if hasattr(vad, "reset"):
+                vad.reset()
 
-        spans = []
-        while not vad.empty():
-            segment = vad.front
-            start = int(segment.start)
-            length = len(np.asarray(segment.samples))
-            vad.pop()
-            if length:
-                spans.append((max(0, start), min(start + length, len(samples))))
-        return spans
+            step = int(0.5 * sample_rate)
+            for i in range(0, len(samples), step):
+                vad.accept_waveform(samples[i : i + step])
+            vad.flush()
+
+            spans = []
+            while not vad.empty():
+                segment = vad.front
+                start = int(segment.start)
+                length = len(segment.samples)
+                vad.pop()
+                if length:
+                    spans.append((max(0, start), min(start + length, len(samples))))
+            return spans
 
     def split(
         self,
