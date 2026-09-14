@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sherpa ASR 语音转文字</title>
-    <link rel="stylesheet" href="/css/style.css?v=14">
+    <link rel="stylesheet" href="/css/style.css?v=15">
 </head>
 <body>
     <div id="toast" class="toast is-hidden" role="status" aria-live="polite"></div>
@@ -73,10 +73,10 @@
                     <span class="tag" id="timeCost"></span>
                     <span class="tag is-hidden" id="statTag"></span>
                     <button class="copy-btn" id="copyBtn" type="button" disabled>复制文本</button>
-                    <div class="export-dropdown">
+                    <div class="export-group" role="group" aria-label="导出文件">
                         <button class="export-btn" id="exportBtn" type="button" disabled>导出 TXT</button>
-                        <button class="export-btn-sub" id="exportSrtBtn" type="button" disabled>导出 SRT</button>
-                        <button class="export-btn-sub" id="exportVttBtn" type="button" disabled>导出 VTT</button>
+                        <button class="export-btn" id="exportSrtBtn" type="button" disabled>导出 SRT</button>
+                        <button class="export-btn" id="exportVttBtn" type="button" disabled>导出 VTT</button>
                     </div>
                 </div>
             </div>
@@ -85,6 +85,6 @@
         </section>
     </main>
 
-    <script src="/js/app.js?v=14"></script>
+    <script src="/js/app.js?v=15"></script>
 </body>
 </html>

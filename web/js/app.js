@@ -108,6 +108,7 @@ function setUploadDone(ok) {
 
 function disableActionButtons() {
     elements.copyBtn.disabled = true;
+    elements.copyBtn.classList.remove("copied");
     elements.exportBtn.disabled = true;
     elements.exportSrtBtn.disabled = true;
     elements.exportVttBtn.disabled = true;
@@ -441,7 +442,7 @@ elements.transcribeBtn.addEventListener("click", async () => {
             body: formData,
             signal: controller.signal,
         });
-        const elapsed = ((performance.now() - start) / 1000).toFixed(2);
+        const elapsed = Math.round((performance.now() - start) / 1000);
         if (!res.ok) {
             setError("转写失败: " + (await readError(res)));
             return;
@@ -456,8 +457,9 @@ elements.transcribeBtn.addEventListener("click", async () => {
         elements.resultText.value = data.text || "(未识别到有效语音内容)";
         state.segments = data.segments || [];
         renderSegments(state.segments);
+        const inference = Math.round(Number(data.inference_time) || 0);
         elements.timeCost.textContent =
-            `耗时 ${elapsed}s / 推理 ${data.inference_time}s`;
+            `耗时 ${elapsed}s / 推理 ${inference}s`;
         showTranscriptStats(data.char_count || 0);
         elements.copyBtn.disabled = !hasText;
         elements.exportBtn.disabled = !hasText;
@@ -492,8 +494,10 @@ elements.copyBtn.addEventListener("click", async () => {
         elements.resultText.select();
     }
     elements.copyBtn.textContent = "已复制";
+    elements.copyBtn.classList.add("copied");
     setTimeout(() => {
         elements.copyBtn.textContent = oldText;
+        elements.copyBtn.classList.remove("copied");
     }, 1500);
 });
 
