@@ -356,6 +356,10 @@ h1 {
     white-space: nowrap;
 }
 
+.tag:empty {
+    display: none;
+}
+
 .copy-btn {
     display: inline-flex;
     align-items: center;

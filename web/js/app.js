@@ -119,6 +119,8 @@ function setError(message) {
     elements.resultTitle.classList.add("error-text");
     elements.resultText.value = message;
     hideTranscriptStats();
+    elements.timeCost.textContent = "";
+    elements.timeCost.classList.add("is-hidden");
     disableActionButtons();
     elements.resultCard.classList.remove("is-hidden");
 }
@@ -232,6 +234,7 @@ function resetFileInfo(file) {
     elements.resultText.value = "";
     elements.resultText.placeholder = "新音频已就绪，点击「开始转写」开始识别...";
     elements.timeCost.textContent = "";
+    elements.timeCost.classList.add("is-hidden");
     hideTranscriptStats();
     elements.progressTag.textContent = "";
     elements.progressTag.classList.add("is-hidden");
@@ -364,6 +367,8 @@ function setCancelledMessage() {
     elements.resultTitle.classList.remove("error-text");
     elements.resultText.value = "本次转写已取消，可重新点击「开始转写」继续。";
     hideTranscriptStats();
+    elements.timeCost.textContent = "";
+    elements.timeCost.classList.add("is-hidden");
     disableActionButtons();
     elements.resultCard.classList.remove("is-hidden");
 }
@@ -400,6 +405,7 @@ elements.transcribeBtn.addEventListener("click", async () => {
     disableActionButtons();
 
     elements.timeCost.textContent = "00:00";
+    elements.timeCost.classList.remove("is-hidden");
     hideTranscriptStats();
     elements.resultCard.classList.remove("is-hidden");
     elements.resultText.value = "正在转写，长录音会分段处理，请稍候...";
@@ -471,6 +477,7 @@ elements.transcribeBtn.addEventListener("click", async () => {
         const inference = Math.round(Number(data.inference_time) || 0);
         elements.timeCost.textContent =
             `耗时 ${elapsed}s / 推理 ${inference}s`;
+        elements.timeCost.classList.remove("is-hidden");
         showTranscriptStats(data.char_count || 0);
         elements.copyBtn.disabled = !hasText;
         elements.exportBtn.disabled = !hasText;
