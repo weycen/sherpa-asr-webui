@@ -1,6 +1,7 @@
 """FastAPI 入口：上传接口 + 长音频分段转写 + 托管 web/ 前端。"""
 
 import asyncio
+import logging
 import os
 import sys
 import tempfile
@@ -95,8 +96,34 @@ async def _periodic_prune(interval_seconds: int = 900):
             print(f"[警告] 定期清理上传文件失败: {exc}", file=sys.stderr)
 
 
+class NoPollingLogFilter(logging.Filter):
+    """过滤高频轮询进度与音频分片请求的访问日志，避免终端刷屏，仅保留启动、转写、错误等关键日志。"""
+
+    EXCLUDED_PREFIXES = ("/api/ytdlp/progress", "/api/transcribe/progress", "/api/audio/")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args and len(record.args) >= 3:
+            path = str(record.args[2])
+            status_code = str(record.args[4]) if len(record.args) >= 5 else "200"
+            if status_code in ("200", "206", "304"):
+                if any(path.startswith(prefix) for prefix in self.EXCLUDED_PREFIXES):
+                    return False
+        else:
+            msg = record.getMessage()
+            if any(prefix in msg for prefix in self.EXCLUDED_PREFIXES):
+                if any(code in msg for code in (" 200 ", " 206 ", " 304 ")):
+                    return False
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(NoPollingLogFilter())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 确保在 lifespan 中也安装日志过滤器（适应多 worker 与 reload 模式）
+    logging.getLogger("uvicorn.access").addFilter(NoPollingLogFilter())
+
     # 启动阶段：清理上次异常退出的中间 WAV 文件并执行初始淘汰
     swept = upload_store.cleanup_orphan_wavs()
     if swept:

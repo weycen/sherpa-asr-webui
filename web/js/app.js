@@ -854,7 +854,7 @@ function pollUrlProgress(taskId) {
         } catch (err) {
             // 网络抖动等待下一次轮询
         }
-    }, 500);
+    }, 1000);
 }
 
 async function cancelUrlDownload() {

@@ -153,6 +153,39 @@ class TestServerAPI(unittest.TestCase):
 
         asyncio.run(run_ytdlp_tests())
 
+    def test_no_polling_log_filter(self):
+        import logging
+
+        log_filter = server.NoPollingLogFilter()
+
+        # Polling ytdlp progress (200 OK) should be filtered
+        rec1 = logging.LogRecord(
+            "uvicorn.access", logging.INFO, "", 0,
+            '%s - "%s %s %s" %d', ("127.0.0.1", "GET", "/api/ytdlp/progress/123", "HTTP/1.1", 200), None
+        )
+        self.assertFalse(log_filter.filter(rec1))
+
+        # Streaming audio chunk (206 Partial Content) should be filtered
+        rec2 = logging.LogRecord(
+            "uvicorn.access", logging.INFO, "", 0,
+            '%s - "%s %s %s" %d', ("127.0.0.1", "GET", "/api/audio/123", "HTTP/1.1", 206), None
+        )
+        self.assertFalse(log_filter.filter(rec2))
+
+        # Normal business request should NOT be filtered
+        rec3 = logging.LogRecord(
+            "uvicorn.access", logging.INFO, "", 0,
+            '%s - "%s %s %s" %d', ("127.0.0.1", "POST", "/api/ytdlp/start", "HTTP/1.1", 200), None
+        )
+        self.assertTrue(log_filter.filter(rec3))
+
+        # Error response on audio should NOT be filtered
+        rec4 = logging.LogRecord(
+            "uvicorn.access", logging.INFO, "", 0,
+            '%s - "%s %s %s" %d', ("127.0.0.1", "GET", "/api/audio/missing", "HTTP/1.1", 404), None
+        )
+        self.assertTrue(log_filter.filter(rec4))
+
 
 if __name__ == "__main__":
     unittest.main()
