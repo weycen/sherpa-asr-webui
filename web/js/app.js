@@ -28,6 +28,19 @@ const elements = {
     exportSrtBtn: document.getElementById("exportSrtBtn"),
     exportVttBtn: document.getElementById("exportVttBtn"),
     toast: document.getElementById("toast"),
+    tabUpload: document.getElementById("tabUpload"),
+    tabUrl: document.getElementById("tabUrl"),
+    panelUpload: document.getElementById("panelUpload"),
+    panelUrl: document.getElementById("panelUrl"),
+    urlInput: document.getElementById("urlInput"),
+    urlFetchBtn: document.getElementById("urlFetchBtn"),
+    urlDownloadBox: document.getElementById("urlDownloadBox"),
+    urlDownloadTitle: document.getElementById("urlDownloadTitle"),
+    urlCancelBtn: document.getElementById("urlCancelBtn"),
+    urlProgressBarFill: document.getElementById("urlProgressBarFill"),
+    urlDownloadPercent: document.getElementById("urlDownloadPercent"),
+    urlDownloadSpeed: document.getElementById("urlDownloadSpeed"),
+    urlDownloadEta: document.getElementById("urlDownloadEta"),
 };
 
 // 允许上传的音频扩展名白名单（与 app/uploads.py 的 SUPPORTED_AUDIO_EXTENSIONS 保持一致）。
@@ -52,6 +65,10 @@ const state = {
     toastTimer: null,
     segments: [],
     activeView: "text",
+    activeSourceTab: "upload",
+    urlTaskId: null,
+    urlDownloading: false,
+    urlPollingTimer: null,
 };
 
 function formatSize(bytes) {
@@ -199,6 +216,11 @@ async function loadModels() {
         }
         elements.punctSelect.value = data.default_punctuation || "none";
         elements.punctSelect.disabled = (data.punctuations || []).length === 0;
+
+        if (data.ytdlp_available === false) {
+            elements.tabUrl.title = "服务端未检测到 yt-dlp 工具";
+            elements.tabUrl.style.opacity = "0.6";
+        }
 
         updateButton();
     } catch (err) {
@@ -652,6 +674,211 @@ elements.exportSrtBtn.addEventListener("click", () => {
 elements.exportVttBtn.addEventListener("click", () => {
     if (state.busy || elements.exportVttBtn.disabled || !state.segments.length) return;
     saveFile(generateVtt(state.segments), `${state.exportBaseName}.vtt`, "text/vtt", "VTT 字幕");
+});
+
+function switchSourceTab(tab) {
+    if (state.busy || state.uploading || state.urlDownloading) {
+        showToast("当前有任务正在进行中，请等待完成或取消");
+        return;
+    }
+    state.activeSourceTab = tab;
+    if (tab === "url") {
+        elements.tabUpload.classList.remove("active");
+        elements.tabUpload.setAttribute("aria-selected", "false");
+        elements.tabUrl.classList.add("active");
+        elements.tabUrl.setAttribute("aria-selected", "true");
+        elements.panelUpload.classList.add("is-hidden");
+        elements.panelUrl.classList.remove("is-hidden");
+        elements.urlInput.focus();
+    } else {
+        elements.tabUrl.classList.remove("active");
+        elements.tabUrl.setAttribute("aria-selected", "false");
+        elements.tabUpload.classList.add("active");
+        elements.tabUpload.setAttribute("aria-selected", "true");
+        elements.panelUrl.classList.add("is-hidden");
+        elements.panelUpload.classList.remove("is-hidden");
+    }
+}
+
+function resetUrlDownloadUI() {
+    elements.urlDownloadTitle.textContent = "准备就绪";
+    elements.urlDownloadTitle.classList.remove("is-error");
+    elements.urlProgressBarFill.style.width = "0%";
+    elements.urlDownloadPercent.textContent = "0%";
+    elements.urlDownloadSpeed.textContent = "";
+    elements.urlDownloadEta.textContent = "";
+    elements.urlCancelBtn.disabled = false;
+    elements.urlCancelBtn.textContent = "取消";
+}
+
+function stopUrlPolling() {
+    if (state.urlPollingTimer) {
+        clearInterval(state.urlPollingTimer);
+        state.urlPollingTimer = null;
+    }
+}
+
+async function startUrlDownload() {
+    if (state.busy || state.uploading || state.urlDownloading) return;
+    const url = elements.urlInput.value.trim();
+    if (!url) {
+        showToast("请输入有效的视频或音频链接");
+        elements.urlInput.focus();
+        return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+        showToast("链接必须以 http:// 或 https:// 开头");
+        return;
+    }
+
+    state.urlDownloading = true;
+    elements.urlFetchBtn.disabled = true;
+    elements.urlInput.disabled = true;
+    resetUrlDownloadUI();
+    elements.urlDownloadBox.classList.remove("is-hidden");
+    elements.urlDownloadTitle.textContent = "正在连接并解析视频信息...";
+
+    try {
+        const res = await fetch("/api/ytdlp/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url }),
+        });
+        if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.detail || `请求失败 (${res.status})`);
+        }
+        const data = await res.json();
+        state.urlTaskId = data.task_id;
+        pollUrlProgress(data.task_id);
+    } catch (err) {
+        state.urlDownloading = false;
+        elements.urlFetchBtn.disabled = false;
+        elements.urlInput.disabled = false;
+        elements.urlDownloadTitle.textContent = err.message || "发起下载失败";
+        elements.urlDownloadTitle.classList.add("is-error");
+        showToast(err.message || "下载失败");
+    }
+}
+
+function pollUrlProgress(taskId) {
+    stopUrlPolling();
+    state.urlPollingTimer = setInterval(async () => {
+        try {
+            const res = await fetch(`/api/ytdlp/progress/${encodeURIComponent(taskId)}`);
+            if (!res.ok) {
+                stopUrlPolling();
+                state.urlDownloading = false;
+                elements.urlFetchBtn.disabled = false;
+                elements.urlInput.disabled = false;
+                elements.urlDownloadTitle.textContent = "查询进度失败或任务已过期";
+                elements.urlDownloadTitle.classList.add("is-error");
+                return;
+            }
+            const job = await res.json();
+            if (job.title) {
+                elements.urlDownloadTitle.textContent = job.title;
+            } else if (job.status === "fetching") {
+                elements.urlDownloadTitle.textContent = "正在解析视频音轨信息...";
+            }
+
+            if (Number.isFinite(job.percent)) {
+                elements.urlProgressBarFill.style.width = `${Math.min(100, Math.max(0, job.percent))}%`;
+                elements.urlDownloadPercent.textContent = `${Math.round(job.percent)}%`;
+            }
+            elements.urlDownloadSpeed.textContent = job.speed || "";
+            elements.urlDownloadEta.textContent = job.eta ? `剩余 ${job.eta}` : "";
+
+            if (job.status === "converting") {
+                elements.urlDownloadEta.textContent = "正在提取封装音频...";
+            }
+
+            if (job.status === "ready") {
+                stopUrlPolling();
+                state.urlDownloading = false;
+                elements.urlFetchBtn.disabled = false;
+                elements.urlInput.disabled = false;
+                elements.urlDownloadTitle.textContent = `✓ 已完成: ${job.filename}`;
+                elements.urlProgressBarFill.style.width = "100%";
+                elements.urlDownloadPercent.textContent = "100%";
+                elements.urlDownloadEta.textContent = "提取完成";
+
+                // 导入全局转录就绪状态
+                state.uploadId = job.upload_id;
+                state.uploadDuration = job.duration;
+                state.segments = [];
+                state.exportBaseName = (job.title || job.filename || "audio").replace(/\.[^.]+$/, "");
+
+                elements.fileName.textContent = job.filename;
+                elements.fileMeta.textContent = `${formatSize(job.size)}${job.duration ? ` / ${formatDuration(job.duration)}` : ""}`;
+                elements.fileUploadRow.classList.remove("is-hidden");
+                elements.uploadProgressBar.style.width = "100%";
+                setUploadDone(true);
+
+                elements.audioPlayer.pause();
+                elements.audioPlayer.src = `/api/audio/${encodeURIComponent(job.upload_id)}`;
+                elements.audioPlayer.load();
+                elements.audioPlayerWrap.classList.remove("is-hidden");
+
+                // 重置识别结果框为等待转写状态
+                setSuccess();
+                elements.resultText.value = "";
+                elements.resultText.placeholder = "网络音频已就绪，点击「开始转写」开始识别...";
+                elements.timeCost.textContent = "";
+                elements.timeCost.classList.add("is-hidden");
+                hideTranscriptStats();
+                elements.progressTag.textContent = "";
+                elements.progressTag.classList.add("is-hidden");
+                renderSegments([]);
+                switchView("text");
+                disableActionButtons();
+                updateButton();
+            } else if (job.status === "error") {
+                stopUrlPolling();
+                state.urlDownloading = false;
+                elements.urlFetchBtn.disabled = false;
+                elements.urlInput.disabled = false;
+                elements.urlDownloadTitle.textContent = job.error || "下载失败";
+                elements.urlDownloadTitle.classList.add("is-error");
+                elements.urlDownloadEta.textContent = "";
+                showToast(job.error || "下载失败");
+            } else if (job.status === "cancelled") {
+                stopUrlPolling();
+                state.urlDownloading = false;
+                elements.urlFetchBtn.disabled = false;
+                elements.urlInput.disabled = false;
+                elements.urlDownloadTitle.textContent = "已取消下载";
+                elements.urlDownloadTitle.classList.remove("is-error");
+                elements.urlDownloadEta.textContent = "";
+            }
+        } catch (err) {
+            // 网络抖动等待下一次轮询
+        }
+    }, 500);
+}
+
+async function cancelUrlDownload() {
+    if (!state.urlTaskId || !state.urlDownloading) return;
+    elements.urlCancelBtn.disabled = true;
+    elements.urlCancelBtn.textContent = "正在取消...";
+    try {
+        await fetch(`/api/ytdlp/cancel/${encodeURIComponent(state.urlTaskId)}`, {
+            method: "POST",
+        });
+    } catch (err) {
+        // 忽略取消请求异常
+    }
+}
+
+elements.tabUpload.addEventListener("click", () => switchSourceTab("upload"));
+elements.tabUrl.addEventListener("click", () => switchSourceTab("url"));
+elements.urlFetchBtn.addEventListener("click", startUrlDownload);
+elements.urlCancelBtn.addEventListener("click", cancelUrlDownload);
+elements.urlInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        startUrlDownload();
+    }
 });
 
 disableActionButtons();

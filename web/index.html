@@ -32,12 +32,42 @@
         </section>
 
         <section class="card" aria-label="转写控制台">
-            <div class="dropzone is-compact" id="dropzone" role="button" tabindex="0" aria-label="选择或拖拽音频文件">
-                <div class="dropzone-icon" aria-hidden="true">🎙</div>
-                <div class="dropzone-text">点击选择或拖拽音频文件到此处</div>
-                <div class="dropzone-hint">支持 MP3 / WAV / M4A / AAC / FLAC / OGG / OPUS / WMA / AMR / AIFF / WEBM 音频</div>
-                <input type="file" id="fileInput"
-                       accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.wma,.amr,.aif,.aiff,.webm,audio/*">
+            <div class="source-tabs" role="tablist">
+                <button type="button" class="source-tab active" id="tabUpload" role="tab" aria-selected="true">📁 上传本地文件</button>
+                <button type="button" class="source-tab" id="tabUrl" role="tab" aria-selected="false">🌐 通过链接下载</button>
+            </div>
+
+            <div class="tab-panel" id="panelUpload">
+                <div class="dropzone is-compact" id="dropzone" role="button" tabindex="0" aria-label="选择或拖拽音频文件">
+                    <div class="dropzone-icon" aria-hidden="true">🎙</div>
+                    <div class="dropzone-text">点击选择或拖拽音频文件到此处</div>
+                    <div class="dropzone-hint">支持 MP3 / WAV / M4A / AAC / FLAC / OGG / OPUS / WMA / AMR / AIFF / WEBM 音频</div>
+                    <input type="file" id="fileInput"
+                           accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.wma,.amr,.aif,.aiff,.webm,audio/*">
+                </div>
+            </div>
+
+            <div class="tab-panel is-hidden" id="panelUrl">
+                <div class="url-input-wrap">
+                    <div class="url-input-row">
+                        <input type="url" id="urlInput" class="url-input" placeholder="输入 YouTube / B站等视频或音频链接 (https://...)" autocomplete="off">
+                        <button type="button" id="urlFetchBtn" class="url-fetch-btn">解析并下载</button>
+                    </div>
+                    <div class="url-download-box is-hidden" id="urlDownloadBox">
+                        <div class="url-download-header">
+                            <span class="url-download-title" id="urlDownloadTitle">准备就绪</span>
+                            <button type="button" class="url-cancel-btn" id="urlCancelBtn">取消</button>
+                        </div>
+                        <div class="url-progress-bar-bg">
+                            <div class="url-progress-bar-fill" id="urlProgressBarFill"></div>
+                        </div>
+                        <div class="url-download-status">
+                            <span id="urlDownloadPercent">0%</span>
+                            <span id="urlDownloadSpeed"></span>
+                            <span id="urlDownloadEta"></span>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="file-upload-row is-hidden" id="fileUploadRow">

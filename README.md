@@ -133,11 +133,18 @@ SenseVoice 这类离线模型输出的中文/粤语通常没有断句标点，�
 | `ASR_MAX_AUDIO_SECONDS` | `0` | 音频时长上限（秒），`0` 表示不限 |
 | `ASR_MAX_CONCURRENT` | `2` | 同时进行的转写任务数上限 |
 | `ASR_UPLOAD_DIR` | 系统临时目录 | 上传文件存放目录 |
+| `ASR_YTDLP_COOKIES_FILE` | 空 | 可选，供 yt-dlp 使用的 cookies.txt 文件路径 |
+| `ASR_YTDLP_PROXY` | 空 | 可选，专用于 yt-dlp 下载的网络代理（若未设则优先继承系统代理） |
+| `ASR_YTDLP_EXTRACTOR_ARGS` | 空 | 可选，传递给 yt-dlp 的 extractor-args 参数 |
 
 ## API
 
-- `GET /api/models`：模型列表，含 `default_model`、`models` 清单、`default_punctuation` 与 `punctuations` 清单。
+- `GET /api/models`：模型列表，含 `default_model`、`models` 清单、`default_punctuation` 与 `punctuations` 清单，以及 `ytdlp_available`。
 - `POST /api/upload`：上传音频（multipart `file`），返回 `upload_id/filename/size/duration`。
-- `POST /api/transcribe`：转写已上传文件（multipart `upload_id` + 可选 `model`、
+- `POST /api/ytdlp/start`：提交在线视频/音频链接（JSON `{"url": "..."}`），在服务端调用 yt-dlp 异步拉取音频流，返回 `{"status": "started", "task_id": "..."}`。
+- `GET /api/ytdlp/progress/{task_id}`：轮询 yt-dlp 下载进度与状态，就绪时返回对应的 `upload_id`。
+- `POST /api/ytdlp/cancel/{task_id}`：中途取消下载并释放临时资源。
+- `GET /api/audio/{upload_id}`：音频流在线试听与回放（支持 HTTP Range 流式传输）。
+- `POST /api/transcribe`：转写已上传或下载的文件（multipart `upload_id` + 可选 `model`、
   `punctuation_model`）。成功返回 `{"status", "model", "text", "paragraphs", "segments",
   "inference_time", "audio_seconds"}`；`text` 按空行分段落。

@@ -12,8 +12,10 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from app.config import DEFAULT_MODELS_FILE, ROOT_DIR, load_models
+from app.downloader import YtDlpManager
 from app.model_manager import ModelLoadError, ModelManager, ModelNotFoundError
 from app.pipeline import transcribe_audio_file
 from app.postprocess import text_stats
@@ -65,6 +67,17 @@ segmenter = Segmenter(VAD_SPEC)
 upload_store = UploadStore(UPLOAD_ROOT, max_total_bytes=MAX_STORAGE_BYTES)
 concurrency_gate = threading.BoundedSemaphore(MAX_CONCURRENT)
 
+YTDLP_COOKIES_FILE = os.getenv("ASR_YTDLP_COOKIES_FILE")
+YTDLP_PROXY = os.getenv("ASR_YTDLP_PROXY")
+YTDLP_EXTRACTOR_ARGS = os.getenv("ASR_YTDLP_EXTRACTOR_ARGS")
+ytdlp_manager = YtDlpManager(
+    upload_store=upload_store,
+    cookies_file=YTDLP_COOKIES_FILE,
+    proxy=YTDLP_PROXY,
+    max_audio_seconds=MAX_AUDIO_SECONDS,
+    extractor_args=YTDLP_EXTRACTOR_ARGS,
+)
+
 # 进行中的转写任务：upload_id -> {"cancel_event", "done", "total"}。
 _job_lock = threading.Lock()
 _jobs: dict[str, dict] = {}
@@ -99,6 +112,11 @@ async def lifespan(app: FastAPI):
             await cleanup_task
         except asyncio.CancelledError:
             pass
+        for task_id in list(ytdlp_manager._jobs.keys()):
+            try:
+                await ytdlp_manager.cancel_job(task_id)
+            except Exception:
+                pass
 
 
 app = FastAPI(title="Sherpa ASR WebUI", lifespan=lifespan)
@@ -140,6 +158,7 @@ def list_models():
         "models": manager.list(),
         "default_punctuation": punctuation_manager.default_id if punctuation_manager else None,
         "punctuations": punctuation_manager.list() if punctuation_manager else [],
+        "ytdlp_available": ytdlp_manager.is_available(),
     }
 
 
@@ -333,6 +352,39 @@ def transcribe_progress(upload_id: str = Query(...)):
     }
 
 
+class YtDlpStartRequest(BaseModel):
+    url: str
+
+
+@app.post("/api/ytdlp/start")
+async def ytdlp_start(req: YtDlpStartRequest):
+    if not ytdlp_manager.is_available():
+        raise HTTPException(status_code=503, detail="服务端未安装或找不到 yt-dlp 工具，无法下载在线视频")
+    try:
+        task_id = await ytdlp_manager.start_download(req.url)
+        return {"status": "started", "task_id": task_id}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"创建下载任务失败: {exc}")
+
+
+@app.get("/api/ytdlp/progress/{task_id}")
+async def ytdlp_progress(task_id: str):
+    job = await ytdlp_manager.get_job(task_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="下载任务不存在或已过期")
+    return job
+
+
+@app.post("/api/ytdlp/cancel/{task_id}")
+async def ytdlp_cancel(task_id: str):
+    cancelled = await ytdlp_manager.cancel_job(task_id)
+    return {"status": "cancelled" if cancelled else "not_found"}
+
+
 if not WEB_DIR.is_dir():
     print(f"[错误] 前端目录不存在: {WEB_DIR}", file=sys.stderr)
     sys.exit(1)
@@ -348,4 +400,5 @@ if __name__ == "__main__":
     print(f"上传大小上限: {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
     print(f"存储空间配额: {MAX_STORAGE_BYTES // (1024 * 1024 * 1024)} GB")
     print(f"并发转写上限: {MAX_CONCURRENT}")
+    print(f"yt-dlp 可用性: {'已就绪' if ytdlp_manager.is_available() else '未安装'}")
     uvicorn.run(app, host=HOST, port=PORT)

@@ -113,6 +113,46 @@ class TestServerAPI(unittest.TestCase):
         finally:
             server.upload_store.delete(meta["id"])
 
+    def test_list_models_includes_ytdlp(self):
+        data = server.list_models()
+        self.assertIn("ytdlp_available", data)
+
+    def test_ytdlp_endpoints(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        async def run_ytdlp_tests():
+            # Test invalid url
+            req = server.YtDlpStartRequest(url="invalid_url")
+            with self.assertRaises(HTTPException) as ctx:
+                await server.ytdlp_start(req)
+            self.assertEqual(ctx.exception.status_code, 400)
+
+            # Test successful start with mock
+            with patch.object(server.ytdlp_manager, "start_download", new=AsyncMock(return_value="mock_task_123")):
+                req = server.YtDlpStartRequest(url="https://www.youtube.com/watch?v=123")
+                res = await server.ytdlp_start(req)
+                self.assertEqual(res["status"], "started")
+                self.assertEqual(res["task_id"], "mock_task_123")
+
+            # Test progress for nonexistent task
+            with self.assertRaises(HTTPException) as ctx:
+                await server.ytdlp_progress("nonexistent_task")
+            self.assertEqual(ctx.exception.status_code, 404)
+
+            # Test progress for existing mock job
+            with patch.object(server.ytdlp_manager, "get_job", new=AsyncMock(return_value={"status": "downloading", "percent": 50.0})):
+                prog = await server.ytdlp_progress("mock_task_123")
+                self.assertEqual(prog["status"], "downloading")
+                self.assertEqual(prog["percent"], 50.0)
+
+            # Test cancel
+            with patch.object(server.ytdlp_manager, "cancel_job", new=AsyncMock(return_value=True)):
+                cancel_res = await server.ytdlp_cancel("mock_task_123")
+                self.assertEqual(cancel_res["status"], "cancelled")
+
+        asyncio.run(run_ytdlp_tests())
+
 
 if __name__ == "__main__":
     unittest.main()
