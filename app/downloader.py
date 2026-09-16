@@ -15,6 +15,10 @@ from app.uploads import UploadStore
 
 
 _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
+_STD_PROGRESS_RE = re.compile(
+    r"\[download\]\s+(\d+(?:\.\d+)?)%(?:.*?at\s+([^\s]+))?(?:.*?ETA\s+([^\s]+))?"
+)
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mK]")
 _INVALID_FILENAME_CHARS = re.compile(r'[\\/*?:"<>|\x00-\x1f]')
 
 
@@ -167,11 +171,14 @@ class YtDlpManager:
                 self.executable,
                 "--newline",
                 "--no-playlist",
+                "--progress",
+                "--color",
+                "never",
                 "-x",
                 "--audio-format",
                 "mp3",
                 "--progress-template",
-                "PROGRESS:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
+                "download:PROGRESS:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
                 "--print",
                 "TITLE:%(title)s",
                 "--print",
@@ -191,33 +198,20 @@ class YtDlpManager:
 
             cmd.append(job.url)
 
+            env = {**os.environ, "PYTHONUNBUFFERED": "1"}
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
             job.process = proc
 
-            async def _read_stderr():
-                while True:
-                    line = await proc.stderr.readline()
-                    if not line:
-                        break
-                    decoded = line.decode("utf-8", errors="replace").strip()
-                    if decoded:
-                        stderr_chunks.append(decoded)
-                        if len(stderr_chunks) > 50:
-                            stderr_chunks.pop(0)
-
-            stderr_task = asyncio.create_task(_read_stderr())
-
-            while True:
-                line_bytes = await proc.stdout.readline()
-                if not line_bytes:
-                    break
-                line = line_bytes.decode("utf-8", errors="replace").strip()
+            def _process_chunk(line: str) -> None:
+                nonlocal dest_filepath
+                line = _ANSI_ESCAPE.sub("", line).strip()
                 if not line:
-                    continue
+                    return
 
                 if line.startswith("TITLE:"):
                     raw_title = line[6:].strip()
@@ -230,8 +224,8 @@ class YtDlpManager:
                         if self.max_audio_seconds and dur_val > self.max_audio_seconds:
                             job.status = "error"
                             job.error = f"视频音频时长（{int(dur_val)}秒）超过系统上限（{int(self.max_audio_seconds)}秒）"
-                            proc.terminate()
-                            break
+                            if proc.returncode is None:
+                                proc.terminate()
                     except (ValueError, TypeError):
                         pass
 
@@ -246,18 +240,69 @@ class YtDlpManager:
                             except ValueError:
                                 pass
                     if len(parts) >= 2:
-                        job.speed = parts[1].strip()
+                        s = parts[1].strip()
+                        if s and s not in ("NA", "Unknown"):
+                            job.speed = s
                     if len(parts) >= 3:
-                        job.eta = parts[2].strip()
+                        e = parts[2].strip()
+                        if e and e not in ("NA", "Unknown"):
+                            job.eta = e
+                    if job.percent >= 100.0:
+                        job.eta = "00:00"
+
+                elif line.startswith("[download]"):
+                    m = _STD_PROGRESS_RE.search(line)
+                    if m:
+                        job.status = "downloading"
+                        pct_str, speed_str, eta_str = m.groups()
+                        try:
+                            job.percent = float(pct_str)
+                        except (ValueError, TypeError):
+                            pass
+                        if speed_str and speed_str not in ("NA", "Unknown"):
+                            job.speed = speed_str
+                        if eta_str and eta_str not in ("NA", "Unknown"):
+                            job.eta = eta_str
+                        if job.percent >= 100.0:
+                            job.eta = "00:00"
 
                 elif line.startswith("DEST:"):
                     dest_filepath = line[5:].strip()
 
                 elif "[ExtractAudio]" in line or "[ffmpeg]" in line:
                     job.status = "converting"
+                    job.percent = 100.0
+                    job.speed = ""
+                    job.eta = ""
 
+            def _handle_raw(raw_str: str) -> None:
+                for chunk in raw_str.replace("\r\n", "\n").split("\r"):
+                    for subline in chunk.split("\n"):
+                        _process_chunk(subline)
+
+            async def _read_stdout():
+                while True:
+                    line_bytes = await proc.stdout.readline()
+                    if not line_bytes:
+                        break
+                    decoded = line_bytes.decode("utf-8", errors="replace")
+                    _handle_raw(decoded)
+
+            async def _read_stderr():
+                while True:
+                    line_bytes = await proc.stderr.readline()
+                    if not line_bytes:
+                        break
+                    decoded = line_bytes.decode("utf-8", errors="replace")
+                    stripped = decoded.strip()
+                    if stripped:
+                        stderr_chunks.append(stripped)
+                        if len(stderr_chunks) > 50:
+                            stderr_chunks.pop(0)
+                    _handle_raw(decoded)
+
+            await asyncio.gather(_read_stdout(), _read_stderr())
             await proc.wait()
-            await stderr_task
 
             if job.cancel_requested or job.status == "cancelled":
                 self.upload_store.delete(job.upload_id)
@@ -324,7 +369,7 @@ class YtDlpManager:
             job.eta = "00:00"
 
         except Exception as exc:
-            if not job.cancel_requested:
+            if not job.cancel_requested and job.status != "cancelled":
                 job.status = "error"
                 job.error = f"处理异常: {exc}"
             self.upload_store.delete(job.upload_id)

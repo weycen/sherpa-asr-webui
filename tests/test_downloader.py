@@ -144,6 +144,48 @@ class TestYtDlpManager(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(job_dict["status"], "error")
             self.assertIn("超过系统上限", job_dict["error"])
 
+    async def test_standard_progress_parsing_and_stderr(self):
+        stdout_lines = [
+            b"TITLE:Standard Video\n",
+            b"DURATION:10.0\n",
+            b"[download]  35.5% of  12.50MiB at  3.20MiB/s ETA 00:05\n",
+        ]
+        stderr_lines = [
+            b"[download]  80.0% of  12.50MiB at  4.10MiB/s ETA 00:01\n",
+            b"[ExtractAudio] Destination: mock\n",
+        ]
+
+        async def mock_stdout_readline():
+            if stdout_lines:
+                return stdout_lines.pop(0)
+            return b""
+
+        async def mock_stderr_readline():
+            if stderr_lines:
+                line = stderr_lines.pop(0)
+                if b"[ExtractAudio]" in line:
+                    job = self.manager._jobs[task_id]
+                    dst_dir = self.store.root / job.upload_id
+                    dst_dir.mkdir(parents=True, exist_ok=True)
+                    (dst_dir / "source.mp3").write_bytes(b"dummy")
+                return line
+            return b""
+
+        mock_proc = MagicMock()
+        mock_proc.stdout.readline = mock_stdout_readline
+        mock_proc.stderr.readline = mock_stderr_readline
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=mock_proc)):
+            task_id = await self.manager.start_download("https://www.youtube.com/watch?v=std")
+            await asyncio.sleep(0.1)
+
+            job_dict = await self.manager.get_job(task_id)
+            self.assertEqual(job_dict["status"], "ready")
+            self.assertEqual(job_dict["percent"], 100.0)
+            self.assertEqual(job_dict["title"], "Standard Video")
+
 
 if __name__ == "__main__":
     unittest.main()

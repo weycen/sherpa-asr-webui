@@ -763,7 +763,7 @@ async function startUrlDownload() {
 
 function pollUrlProgress(taskId) {
     stopUrlPolling();
-    state.urlPollingTimer = setInterval(async () => {
+    const checkProgress = async () => {
         try {
             const res = await fetch(`/api/ytdlp/progress/${encodeURIComponent(taskId)}`);
             if (!res.ok) {
@@ -790,6 +790,9 @@ function pollUrlProgress(taskId) {
             elements.urlDownloadEta.textContent = job.eta ? `剩余 ${job.eta}` : "";
 
             if (job.status === "converting") {
+                elements.urlProgressBarFill.style.width = "100%";
+                elements.urlDownloadPercent.textContent = "100%";
+                elements.urlDownloadSpeed.textContent = "";
                 elements.urlDownloadEta.textContent = "正在提取封装音频...";
             }
 
@@ -854,7 +857,9 @@ function pollUrlProgress(taskId) {
         } catch (err) {
             // 网络抖动等待下一次轮询
         }
-    }, 1000);
+    };
+    checkProgress();
+    state.urlPollingTimer = setInterval(checkProgress, 400);
 }
 
 async function cancelUrlDownload() {
